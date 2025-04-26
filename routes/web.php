@@ -17,5 +17,5 @@ Route::get('/', function () {
     return view('welcome');
 });
 
-Route::get('/articulos', [App\Http\Controllers\ArticuloController::class, 'index']);
-Route::get('/categorias', [App\Http\Controllers\ArticuloController::class, 'getCategotias']);
+Route::get('/articulos', [App\Http\Controllers\ArticuloController::class, 'index'])->name('articulos');
+Route::get('/categorias', [App\Http\Controllers\ArticuloController::class, 'getCategotias'])->name('categorias');

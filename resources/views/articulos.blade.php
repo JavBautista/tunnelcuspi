@@ -4,6 +4,8 @@
 
 @section('content')
     <div class="container">
+        <a href="{{ route('categorias') }}"class="btn btn-primary">Categorias</a>
+        <hr>
         <h1>Artículos</h1>
 
         <!-- Tabla de Artículos -->
