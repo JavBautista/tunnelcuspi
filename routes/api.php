@@ -39,6 +39,26 @@ Route::middleware('validate.apikey')->get('/sync/departamentos', function (Reque
     ]);
 });
 
+Route::middleware('validate.apikey')->get('/sync/categorias', function (Request $request) {
+    $categorias = DB::table('categoria')
+        ->select(
+            'cat_id',
+            'nombre',
+            'system',
+            'status',
+            'dep_id',
+            'comision'
+        )
+        ->orderBy('cat_id', 'asc')
+        ->get();
+
+    return response()->json([
+        'ok' => true,
+        'categorias' => $categorias,
+    ]);
+});
+
+
 
 Route::middleware('validate.apikey')->get('/sync/articulos', function (Request $request) {
     $limit = $request->query('limit', 100);
