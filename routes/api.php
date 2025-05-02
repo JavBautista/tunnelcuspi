@@ -20,10 +20,42 @@ Route::middleware('validate.apikey')->group(function() {
 });
 
 Route::middleware('validate.apikey')->get('/sync/articulos', function (Request $request) {
+    $limit = $request->query('limit', 100);
+    $offset = $request->query('offset', 0);
+
     $articulos = DB::table('articulo')
-        ->select('art_id', 'clave', 'precio1', 'precio2', 'existencia', 'status')
-        ->orderBy('art_id', 'desc')
-        ->limit(100)
+        ->select(
+            'art_id',
+            'clave',
+            'claveAlterna',
+            'descripcion',
+            'localizacion',
+            'margen1',
+            'margen2',
+            'margen3',
+            'margen4',
+            'precio1',
+            'precio2',
+            'precio3',
+            'precio4',
+            'mayoreo1',
+            'mayoreo2',
+            'mayoreo3',
+            'mayoreo4',
+            'invMin',
+            'invMax',
+            'existencia',
+            'status',
+            'factor',
+            'precioCompra',
+            'preCompraProm',
+            'unidadCompra',
+            'unidadVenta',
+            'cat_id'
+        )
+        ->orderBy('art_id', 'asc')
+        ->limit($limit)
+        ->offset($offset)
         ->get();
 
     return response()->json([
