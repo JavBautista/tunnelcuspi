@@ -19,6 +19,27 @@ Route::middleware('validate.apikey')->group(function() {
     Route::post('/existencia', [TunnelController::class, 'existencia']);
 });
 
+Route::middleware('validate.apikey')->get('/sync/departamentos', function (Request $request) {
+    $departamentos = DB::table('departamento')
+        ->select(
+            'dep_id',
+            'nombre',
+            'restringido',
+            'porcentaje',
+            'system',
+            'status',
+            'comision'
+        )
+        ->orderBy('dep_id', 'asc')
+        ->get();
+
+    return response()->json([
+        'ok' => true,
+        'departamentos' => $departamentos,
+    ]);
+});
+
+
 Route::middleware('validate.apikey')->get('/sync/articulos', function (Request $request) {
     $limit = $request->query('limit', 100);
     $offset = $request->query('offset', 0);
