@@ -53,6 +53,7 @@ Route::middleware('validate.apikey')->get('/sync/articulos', function (Request $
             'preCompraProm',
             'unidadCompra',
             'unidadVenta',
+            'cuentaPredial',
             'cat_id'
         )
         ->orderBy('art_id', 'asc')
