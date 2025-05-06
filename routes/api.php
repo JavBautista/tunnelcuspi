@@ -102,6 +102,15 @@ Route::middleware('validate.apikey')->get('/sync/articulos', function (Request $
         ->offset($offset)
         ->get();
 
+    foreach ($articulos as $art) {
+        $existenciaBodega = DB::connection('bodega')
+            ->table('articulo')
+            ->where('clave', $art->clave)
+            ->value('existencia') ?? 0;
+
+        $art->existencia_bodega = floatval($existenciaBodega);
+    }
+    
     return response()->json([
         'ok' => true,
         'articulos' => $articulos,
