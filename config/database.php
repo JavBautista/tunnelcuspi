@@ -62,6 +62,19 @@ return [
                 PDO::MYSQL_ATTR_SSL_CA => env('MYSQL_ATTR_SSL_CA'),
             ]) : [],
         ],
+        'bodega' => [
+            'driver' => 'mysql',
+            'host' => env('DB_BODEGA_HOST', '127.0.0.1'),
+            'port' => env('DB_BODEGA_PORT', '3306'),
+            'database' => env('DB_BODEGA_DATABASE', 'forge'),
+            'username' => env('DB_BODEGA_USERNAME', 'forge'),
+            'password' => env('DB_BODEGA_PASSWORD', ''),
+            'charset' => 'utf8',
+            'collation' => 'utf8_unicode_ci',
+            'prefix' => '',
+            'strict' => false,
+            'engine' => null,
+        ],
 
         'pgsql' => [
             'driver' => 'pgsql',
