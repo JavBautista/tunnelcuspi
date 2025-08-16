@@ -4,6 +4,7 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
 use App\Http\Controllers\Api\TunnelController;
+use App\Http\Controllers\Api\CotizacionController;
 
 /*
 |--------------------------------------------------------------------------
@@ -17,6 +18,7 @@ use App\Http\Controllers\Api\TunnelController;
 */
 Route::middleware('validate.apikey')->group(function() {
     Route::post('/existencia', [TunnelController::class, 'existencia']);
+    Route::post('/cotizacion/crear', [CotizacionController::class, 'crear']);
 });
 
 Route::middleware('validate.apikey')->get('/sync/departamentos', function (Request $request) {

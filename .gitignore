@@ -13,3 +13,11 @@ npm-debug.log
 yarn-error.log
 /.idea
 /.vscode
+
+# Archivos de documentación y contexto de Claude
+CLAUDE.md
+todo.md
+context.md
+api_spec.md
+resumen.txt
+pendientes.txt
