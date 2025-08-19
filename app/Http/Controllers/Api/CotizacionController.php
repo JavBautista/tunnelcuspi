@@ -164,6 +164,8 @@ class CotizacionController extends Controller
                 'mosDetallePaq' => $cotizacionData['mosDetallePaq'] ?? 0,
                 'mosClaveArt' => $cotizacionData['mosClaveArt'] ?? 1,
                 'mosPreAntDesc' => $cotizacionData['mosPreAntDesc'] ?? 0,
+                // ✅ CORRECCIÓN CRÍTICA: Agregar peso=0.0000 para evitar cuelgues SICAR
+                'peso' => $cotizacionData['peso'] ?? 0.0000,
             ];
 
             $cotizacionId = DB::table('cotizacion')->insertGetId($cotizacionInsert);
@@ -174,6 +176,15 @@ class CotizacionController extends Controller
 
             // 5. INSERTAR DETALLES DE ARTÍCULOS
             foreach ($detalles as $detalle) {
+                // ✅ CALCULAR PRECIOS FALTANTES CRÍTICOS PARA SICAR
+                $precioSin = $detalle['precioSin'] ?? $detalle['precioCon'];
+                $precioNorSin = $detalle['precioNorSin'] ?? $detalle['precioCon'];
+                $precioNorCon = $detalle['precioNorCon'] ?? $detalle['precioCon'];
+                
+                $importeSin = $precioSin * $detalle['cantidad'];
+                $importeNorSin = $precioNorSin * $detalle['cantidad'];
+                $importeNorCon = $precioNorCon * $detalle['cantidad'];
+                
                 $detalleInsert = [
                     'cot_id' => $cotizacionId,
                     'art_id' => $detalle['art_id'],
@@ -191,13 +202,13 @@ class CotizacionController extends Controller
                     'descTotal' => $detalle['descTotal'] ?? 0.00,
                     'caracteristicas' => $detalle['caracteristicas'] ?? null,
                     'orden' => $detalle['orden'],
-                    // Campos opcionales de precios e importes
-                    'precioNorSin' => $detalle['precioNorSin'] ?? null,
-                    'precioNorCon' => $detalle['precioNorCon'] ?? null,
-                    'precioSin' => $detalle['precioSin'] ?? null,
-                    'importeNorSin' => $detalle['importeNorSin'] ?? null,
-                    'importeNorCon' => $detalle['importeNorCon'] ?? null,
-                    'importeSin' => $detalle['importeSin'] ?? null,
+                    // ✅ CORRECCIÓN CRÍTICA: Calcular precios faltantes para evitar NULL
+                    'precioNorSin' => $precioNorSin,
+                    'precioNorCon' => $precioNorCon,
+                    'precioSin' => $precioSin,
+                    'importeNorSin' => $importeSin,
+                    'importeNorCon' => $importeNorCon,
+                    'importeSin' => $importeSin,
                     'monPrecioNorSin' => $detalle['monPrecioNorSin'] ?? null,
                     'monPrecioNorCon' => $detalle['monPrecioNorCon'] ?? null,
                     'monPrecioSin' => $detalle['monPrecioSin'] ?? null,
