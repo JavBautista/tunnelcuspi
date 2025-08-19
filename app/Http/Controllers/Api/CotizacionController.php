@@ -129,7 +129,13 @@ class CotizacionController extends Controller
                 }
             }
 
-            // 3. INSERTAR COTIZACIÓN PRINCIPAL
+            // 3. CALCULAR SUBTOTAL AUTOMÁTICO DESDE DETALLES
+            $subtotalCalculado = 0;
+            foreach ($detalles as $detalle) {
+                $subtotalCalculado += ($detalle['cantidad'] * $detalle['precioCon']);
+            }
+
+            // 4. INSERTAR COTIZACIÓN PRINCIPAL CON VALORES SEGUROS
             $cotizacionInsert = [
                 'fecha' => $cotizacionData['fecha'],
                 'header' => $cotizacionData['header'],
@@ -143,8 +149,9 @@ class CotizacionController extends Controller
                 'usu_id' => $cotizacionData['usu_id'],
                 'mon_id' => $monedaId,
                 'vnd_id' => $cotizacionData['vnd_id'] ?? null,
-                'subtotal' => $cotizacionData['subtotal'] ?? null,
-                'descuento' => $cotizacionData['descuento'] ?? null,
+                // ✅ CORRECCIÓN CRÍTICA: Usar valores calculados/seguros en lugar de NULL
+                'subtotal' => $cotizacionData['subtotal'] ?? $subtotalCalculado,
+                'descuento' => $cotizacionData['descuento'] ?? 0.00,
                 'monAbr' => $moneda->abr,
                 'monTipoCambio' => $moneda->tipoCambio,
                 'mosDescuento' => $cotizacionData['mosDescuento'] ?? 0,
@@ -165,7 +172,7 @@ class CotizacionController extends Controller
                 throw new Exception('Error al insertar la cotización principal');
             }
 
-            // 4. INSERTAR DETALLES DE ARTÍCULOS
+            // 5. INSERTAR DETALLES DE ARTÍCULOS
             foreach ($detalles as $detalle) {
                 $detalleInsert = [
                     'cot_id' => $cotizacionId,
@@ -208,7 +215,7 @@ class CotizacionController extends Controller
                 }
             }
 
-            // 5. INSERTAR IMPUESTOS (si los hay)
+            // 6. INSERTAR IMPUESTOS EN COTIZACIONIMP (si los hay)
             if (!empty($impuestos)) {
                 foreach ($impuestos as $impuesto) {
                     $impuestoInsert = [
@@ -230,7 +237,27 @@ class CotizacionController extends Controller
                 }
             }
 
-            // Confirmar transacción
+            // 7. INSERTAR RELACIÓN DETALLECOTIMPUESTO (CRÍTICO PARA SICAR)
+            if (!empty($impuestos)) {
+                foreach ($impuestos as $impuesto) {
+                    // Para cada impuesto, vincularlo con todos los artículos de la cotización
+                    foreach ($detalles as $detalle) {
+                        $detalleImpuestoInsert = [
+                            'cot_id' => $cotizacionId,
+                            'art_id' => $detalle['art_id'],
+                            'imp_id' => $impuesto['imp_id']
+                        ];
+
+                        $detalleImpuestoResult = DB::table('detallecotimpuesto')->insert($detalleImpuestoInsert);
+                        
+                        if (!$detalleImpuestoResult) {
+                            throw new Exception("Error al insertar relación detalle-impuesto: Art {$detalle['art_id']} + Imp {$impuesto['imp_id']}");
+                        }
+                    }
+                }
+            }
+
+            // 8. Confirmar transacción
             DB::commit();
 
             // Obtener la cotización completa para respuesta
