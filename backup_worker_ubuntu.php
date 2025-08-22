@@ -1,5 +1,5 @@
 <?php
-// Script worker para ejecutar backup en background con webhook
+// Script worker para ejecutar backup en background con webhook - VERSIÓN UBUNTU
 require_once __DIR__ . '/vendor/autoload.php';
 
 use Illuminate\Support\Facades\Log;
@@ -35,7 +35,7 @@ if (!$webhookUrl) {
 }
 
 try {
-    logBackup($logId, 'INFO', 'BACKUP WEBHOOK INICIADO', [
+    logBackup($logId, 'INFO', 'BACKUP WEBHOOK INICIADO (UBUNTU)', [
         'webhook_url' => $webhookUrl,
         'timestamp' => date('Y-m-d H:i:s')
     ]);
@@ -93,7 +93,7 @@ try {
     $username = config('database.connections.mysql.username');
     $password = config('database.connections.mysql.password');
 
-    Log::info("[$logId] CONFIGURACIÓN LEÍDA", [
+    Log::info("[$logId] CONFIGURACIÓN LEÍDA (UBUNTU)", [
         'host' => $host,
         'port' => $port,
         'database' => $database,
@@ -116,32 +116,23 @@ try {
 
     Log::info("[$logId] ARCHIVO DESTINO", ['filepath' => $filepath]);
 
-    // 3. Crear archivo de configuración temporal para mysqldump
-    $configFile = storage_path('app/backups/mysql_temp.cnf');
-    $configContent = "[client]\n";
-    $configContent .= "host = {$host}\n";
-    $configContent .= "port = {$port}\n";
-    $configContent .= "user = {$username}\n";
-    if (!empty($password)) {
-        $configContent .= "password = {$password}\n";
-    }
-
-    file_put_contents($configFile, $configContent);
-
-    // 4. Ejecutar mysqldump
-    $mysqldumpPath = env('MYSQLDUMP_PATH', "C:\\Program Files (x86)\\SICAR-8C460\\MySQL\\MySQL Server 5.5\\bin\\mysqldump.exe");
+    // 3. Ejecutar mysqldump - UBUNTU VERSION
+    $mysqldumpPath = env('MYSQLDUMP_PATH', "/usr/bin/mysqldump"); // Ruta estándar Ubuntu
     
     $command = sprintf(
-        '"%s" --defaults-file="%s" --single-transaction --routines --triggers %s > "%s" 2>nul',
+        '%s --host=%s --port=%s --user=%s --password=%s --single-transaction --routines --triggers %s > "%s" 2>/dev/null',
         $mysqldumpPath,
-        $configFile,
-        $database,
+        escapeshellarg($host),
+        escapeshellarg($port),
+        escapeshellarg($username),
+        escapeshellarg($password),
+        escapeshellarg($database),
         $filepath
     );
 
-    Log::info("[$logId] COMANDO MYSQLDUMP", [
-        'platform' => 'windows',
-        'command' => $command
+    Log::info("[$logId] COMANDO MYSQLDUMP (UBUNTU)", [
+        'platform' => 'ubuntu',
+        'command' => preg_replace('/--password=\S+/', '--password=***', $command)
     ]);
 
     $dumpStartTime = microtime(true);
@@ -150,13 +141,16 @@ try {
     exec($command, $output, $returnCode);
     $dumpEndTime = microtime(true);
 
+    if ($returnCode !== 0) {
+        throw new Exception("mysqldump failed with return code: $returnCode");
+    }
+
     Log::info("[$logId] MYSQLDUMP EJECUTADO", [
         'execution_time' => number_format($dumpEndTime - $dumpStartTime, 2) . 's',
-        'result_length' => count($output),
-        'result_preview' => count($output) > 0 ? substr(implode("\n", $output), 0, 200) : null
+        'return_code' => $returnCode
     ]);
 
-    // 5. Verificar que el archivo fue creado
+    // 4. Verificar que el archivo fue creado
     if (!file_exists($filepath)) {
         throw new Exception("Error: archivo backup no fue creado. Filepath: {$filepath}");
     }
@@ -171,43 +165,30 @@ try {
         'filesize_mb' => number_format($filesize / (1024 * 1024), 2)
     ]);
 
-    // 6. Limpiar archivo de configuración
-    if (file_exists($configFile)) {
-        unlink($configFile);
-        Log::info("[$logId] CONFIG FILE LIMPIADO", ['config_file' => $configFile]);
-    }
-
-    // 7. Comprimir el archivo usando PHP nativo (más confiable en Windows)
-    Log::info("[$logId] INICIANDO COMPRESIÓN PHP", ['method' => 'gzip_native']);
+    // 5. Comprimir el archivo usando gzip nativo de Ubuntu
+    Log::info("[$logId] INICIANDO COMPRESIÓN GZIP", ['method' => 'gzip_native_ubuntu']);
     
     $compressStartTime = microtime(true);
     $compressedFile = $filepath . '.gz';
     
-    // Usar gzopen para mejor control de memoria
-    $source = fopen($filepath, 'rb');
-    $compressed = gzopen($compressedFile, 'wb9'); // Máxima compresión
-    
-    if (!$source || !$compressed) {
-        throw new Exception("Error abriendo archivos para compresión");
-    }
-    
-    // Leer y comprimir en chunks de 1MB para evitar problemas de memoria
-    while (!feof($source)) {
-        $chunk = fread($source, 1024 * 1024);
-        gzwrite($compressed, $chunk);
-    }
-    
-    fclose($source);
-    gzclose($compressed);
+    // Usar comando gzip nativo de Ubuntu (más eficiente)
+    $gzipCommand = sprintf('gzip -9 "%s"', $filepath); // -9 = máxima compresión
+    $gzipOutput = [];
+    $gzipReturn = 0;
+    exec($gzipCommand, $gzipOutput, $gzipReturn);
     
     $compressEndTime = microtime(true);
     
-    Log::info("[$logId] COMPRESIÓN PHP COMPLETADA", [
+    if ($gzipReturn !== 0) {
+        throw new Exception("gzip compression failed with return code: $gzipReturn");
+    }
+    
+    Log::info("[$logId] COMPRESIÓN GZIP COMPLETADA", [
         'execution_time' => number_format($compressEndTime - $compressStartTime, 2) . 's',
         'compressed_file' => $compressedFile
     ]);
 
-    // 8. Verificar compresión y obtener estadísticas
+    // 6. Verificar compresión y obtener estadísticas
     if (!file_exists($compressedFile)) {
         throw new Exception("Error: archivo comprimido no fue creado");
     }
@@ -222,12 +203,7 @@ try {
         'compression_ratio' => $compressionRatio . '%'
     ]);
 
-    // 9. Eliminar archivo original SQL (mantener solo el comprimido)
-    if (file_exists($filepath)) {
-        unlink($filepath);
-    }
-
-    // 10. Generar URL de descarga y configurar expiración
+    // 7. Generar URL de descarga y configurar expiración
     $baseUrl = 'https://tunnelcuspi.site'; // URL de producción fija
     $downloadFilename = $logId . '_' . basename($compressedFile);
     $downloadPath = $backupDir . DIRECTORY_SEPARATOR . $downloadFilename;
@@ -242,34 +218,31 @@ try {
 
     $totalTime = microtime(true) - $startTime;
 
-    logBackup($logId, 'INFO', 'BACKUP COMPLETADO', [
+    logBackup($logId, 'INFO', 'BACKUP COMPLETADO (UBUNTU)', [
         'total_time' => number_format($totalTime, 2) . 's',
         'download_url' => $downloadUrl,
         'expires_at' => $expiresAt,
         'success' => true
     ]);
 
-    // 11. Enviar webhook notification con campos que espera CUSPI
+    // 8. Enviar webhook notification
     $webhookData = [
         'job_id' => $logId,
         'status' => 'completed',
-        'filename' => basename($compressedFile), // AGREGADO: nombre del archivo
-        'filesize_mb' => number_format($compressedSize / (1024 * 1024), 2), // CORREGIDO: filesize_mb
+        'filename' => basename($compressedFile),
+        'filesize_mb' => number_format($compressedSize / (1024 * 1024), 2),
         'download_url' => $downloadUrl,
         'expires_at' => $expiresAt,
         'total_time_seconds' => round($totalTime),
         'timestamp' => date('Y-m-d H:i:s')
     ];
 
-    // Enviar webhook usando Laravel HTTP client simplificado
+    // Enviar webhook usando Laravel HTTP client
     try {
         $response = \Illuminate\Support\Facades\Http::timeout(30)
             ->withHeaders([
                 'Content-Type' => 'application/json',
-                'User-Agent' => 'TunnelCUSPI-Webhook/1.0'
-            ])
-            ->withOptions([
-                'verify' => false // Deshabilitar verificación SSL para compatibilidad
+                'User-Agent' => 'TunnelCUSPI-Webhook/1.0-Ubuntu'
             ])
             ->post($webhookUrl, $webhookData);
         
@@ -280,16 +253,16 @@ try {
         $webhookResponse = 'Exception: ' . $webhookEx->getMessage();
     }
 
-    Log::info("[$logId] WEBHOOK ENVIADO", [
+    Log::info("[$logId] WEBHOOK ENVIADO (UBUNTU)", [
         'webhook_url' => $webhookUrl,
         'http_code' => $webhookHttpCode,
         'response' => $webhookResponse ? substr($webhookResponse, 0, 200) : 'empty'
     ]);
 
-    echo "Backup completado exitosamente. Job ID: $logId\n";
+    echo "Backup completado exitosamente (Ubuntu). Job ID: $logId\n";
 
 } catch (Exception $e) {
-    Log::error("[$logId] ERROR EN BACKUP WEBHOOK", [
+    Log::error("[$logId] ERROR EN BACKUP WEBHOOK (UBUNTU)", [
         'error' => $e->getMessage(),
         'file' => $e->getFile(),
         'line' => $e->getLine()
@@ -309,13 +282,13 @@ try {
                 ->withHeaders(['Content-Type' => 'application/json'])
                 ->post($webhookUrl, $errorData);
         } catch (Exception $webhookEx) {
-            Log::error("[$logId] ERROR ENVIANDO WEBHOOK DE ERROR", [
+            Log::error("[$logId] ERROR ENVIANDO WEBHOOK DE ERROR (UBUNTU)", [
                 'webhook_url' => $webhookUrl,
                 'error' => $webhookEx->getMessage()
             ]);
         }
     }
 
-    echo "Error en backup: " . $e->getMessage() . "\n";
+    echo "Error en backup (Ubuntu): " . $e->getMessage() . "\n";
     exit(1);
 }
