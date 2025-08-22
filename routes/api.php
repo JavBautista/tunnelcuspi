@@ -109,12 +109,16 @@ Route::middleware('validate.apikey')->group(function() {
             $isWindows = strtoupper(substr(PHP_OS, 0, 3)) === 'WIN';
             
             // Comando con redirección directa al archivo (sin cargar en memoria)
-            $command = "mysqldump -h{$host} -P{$port} -u{$username} -p{$password} --single-transaction --routines --triggers {$database} > \"{$filepath}\"";
-            
             if ($isWindows) {
-                $command .= ' 2>nul';
+                // Windows: crear archivo temporal de configuración MySQL
+                $configFile = storage_path('app/backups/mysql_temp.cnf');
+                $configContent = "[client]\nuser={$username}\npassword={$password}\nhost={$host}\nport={$port}\n";
+                file_put_contents($configFile, $configContent);
+                
+                $command = "mysqldump --defaults-file=\"{$configFile}\" --single-transaction --routines --triggers {$database} > \"{$filepath}\" 2>nul";
             } else {
-                $command .= ' 2>/dev/null';
+                // Linux: comando directo (como antes)
+                $command = "mysqldump -h{$host} -P{$port} -u{$username} -p{$password} --single-transaction --routines --triggers {$database} > \"{$filepath}\" 2>/dev/null";
             }
             
             Log::info("[$logId] COMANDO MYSQLDUMP", [
@@ -148,6 +152,12 @@ Route::middleware('validate.apikey')->group(function() {
                 'filesize' => $filesize,
                 'filesize_mb' => round($filesize / (1024 * 1024), 2)
             ]);
+            
+            // Limpiar archivo de configuración temporal en Windows
+            if ($isWindows && isset($configFile) && file_exists($configFile)) {
+                unlink($configFile);
+                Log::info("[$logId] CONFIG FILE LIMPIADO", ['config_file' => $configFile]);
+            }
             
             // 4. Comprimir con tar.gz universal
             $compressedFile = $filepath . '.tar.gz';
@@ -267,6 +277,11 @@ Route::middleware('validate.apikey')->group(function() {
             if (isset($compressedFile) && file_exists($compressedFile)) {
                 unlink($compressedFile);
                 Log::info("[$logId] ARCHIVO COMPRIMIDO LIMPIADO", ['filepath' => $compressedFile]);
+            }
+            // Limpiar archivo de configuración temporal en Windows
+            if (isset($configFile) && file_exists($configFile)) {
+                unlink($configFile);
+                Log::info("[$logId] CONFIG FILE LIMPIADO (ERROR)", ['config_file' => $configFile]);
             }
             
             return response()->json([
