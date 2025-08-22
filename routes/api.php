@@ -128,12 +128,21 @@ Route::middleware('validate.apikey')->group(function() {
             
             // Usar shell_exec para redirección que funciona mejor
             $execStart = microtime(true);
-            $result = shell_exec($command);
+            
+            // Para debugging en Windows, capturar errores
+            if ($isWindows) {
+                $debugCommand = str_replace(' 2>nul', ' 2>&1', $command);
+                $result = shell_exec($debugCommand);
+            } else {
+                $result = shell_exec($command);
+            }
+            
             $execTime = round((microtime(true) - $execStart), 2);
             
             Log::info("[$logId] MYSQLDUMP EJECUTADO", [
                 'execution_time' => "{$execTime}s",
-                'result_length' => $result ? strlen($result) : 0
+                'result_length' => $result ? strlen($result) : 0,
+                'result_preview' => $result ? substr($result, 0, 200) : null
             ]);
             
             // Verificar que el archivo se creó correctamente
