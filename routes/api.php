@@ -196,30 +196,68 @@ Route::middleware('validate.apikey')->group(function() {
         
         // Si es webhook, respuesta inmediata
         if ($isWebhookMode) {
-            Log::info("[$logId] BACKUP WEBHOOK SOLICITADO", [
+            // Detectar información del cliente que solicita
+            $clientInfo = [
                 'webhook_url' => $webhookUrl,
-                'timestamp' => date('Y-m-d H:i:s')
-            ]);
+                'timestamp' => date('Y-m-d H:i:s'),
+                'client_ip' => $request->ip(),
+                'user_agent' => $request->userAgent(),
+                'referer' => $request->header('referer'),
+                'origin' => $request->header('origin'),
+                'host' => $request->header('host'),
+                'x_forwarded_for' => $request->header('x-forwarded-for'),
+                'all_headers' => $request->headers->all()
+            ];
             
-            // Lanzar job en background usando comando artisan
+            Log::info("[$logId] BACKUP WEBHOOK SOLICITADO", $clientInfo);
+            
+            // Lanzar job en background usando script worker con PHP de Laragon
             $backgroundCommand = sprintf(
-                'php %s backup:generate %s %s > /dev/null 2>&1 &',
-                base_path('artisan'),
+                '"C:\laragon\bin\php\php-7.4.33-nts-Win32-vc15-x86\php.exe" %s %s %s',
+                base_path('backup_worker.php'),
                 $logId,
                 escapeshellarg($webhookUrl)
             );
             
             if (strtoupper(substr(PHP_OS, 0, 3)) === 'WIN') {
-                // Windows: usar start para proceso en background
-                $backgroundCommand = sprintf(
-                    'start /B php %s backup:generate %s %s',
-                    base_path('artisan'),
-                    $logId,
-                    escapeshellarg($webhookUrl)
-                );
+                // CAMBIAR ENTRE TEST Y REAL AQUÍ
+                $useRealBackup = true; // CAMBIAR A false PARA MODO TEST
+                
+                if ($useRealBackup) {
+                    // MODO REAL: Usar launcher.bat para verdadero background
+                    $launcherPath = base_path('backup_launcher.bat');
+                    $backgroundCommand = sprintf(
+                        '"%s" %s %s',
+                        $launcherPath,
+                        $logId,
+                        escapeshellarg($webhookUrl)
+                    );
+                } else {
+                    // MODO TEST: Usar método directo (funciona bien para 5 segundos)
+                    $phpPath = 'C:\\laragon\\bin\\php\\php-7.4.33-nts-Win32-vc15-x86\\php.exe';
+                    $scriptPath = base_path('backup_worker_test.php');
+                    $backgroundCommand = sprintf(
+                        '"%s" "%s" %s %s',
+                        $phpPath,
+                        $scriptPath,
+                        $logId,
+                        escapeshellarg($webhookUrl)
+                    );
+                }
             }
             
-            exec($backgroundCommand);
+            // Lanzar proceso en background (mismo método que funcionaba en TEST)
+            if (strtoupper(substr(PHP_OS, 0, 3)) === 'WIN') {
+                // Windows: usar popen sin pclose (método que funcionaba en TEST)
+                $process = popen($backgroundCommand . ' 2>&1', 'r');
+                if ($process) {
+                    // NO usar pclose aquí - dejar el proceso corriendo
+                    // pclose($process); // COMENTADO para no esperar
+                }
+            } else {
+                // Linux/Unix: usar exec normal
+                exec($backgroundCommand);
+            }
             
             return response()->json([
                 'ok' => true,
