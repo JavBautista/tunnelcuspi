@@ -6,6 +6,8 @@ use Illuminate\Support\Facades\Route;
 use Illuminate\Support\Facades\Log;
 use App\Http\Controllers\Api\TunnelController;
 use App\Http\Controllers\Api\CotizacionController;
+use App\Http\Controllers\Api\ArticuloController;
+use App\Http\Controllers\Api\PedidoController;
 
 /*
 |--------------------------------------------------------------------------
@@ -18,8 +20,12 @@ use App\Http\Controllers\Api\CotizacionController;
 |
 */
 Route::middleware('validate.apikey')->group(function() {
+
     Route::post('/existencia', [TunnelController::class, 'existencia']);
     Route::post('/cotizacion/crear', [CotizacionController::class, 'crear']);
+    Route::post('/articulo/asignar-proveedor', [ArticuloController::class, 'asignarProveedor']);
+    Route::post('/articulo/asignar-proveedor-masivo', [ArticuloController::class, 'asignarProveedorMasivo']);
+    Route::post('/pedidos/crear', [PedidoController::class, 'crear']);
     
     Route::get('/backup/logs', function (Request $request) {
         try {
@@ -674,6 +680,7 @@ Route::middleware('validate.apikey')->group(function() {
             ], 500);
         }
     });
+    
 });
 
 Route::middleware('validate.apikey')->get('/sync/departamentos', function (Request $request) {
@@ -714,8 +721,6 @@ Route::middleware('validate.apikey')->get('/sync/categorias', function (Request 
         'categorias' => $categorias,
     ]);
 });
-
-
 
 Route::middleware('validate.apikey')->get('/sync/articulos', function (Request $request) {
     $limit = $request->query('limit', 100);
