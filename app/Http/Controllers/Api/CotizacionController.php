@@ -5,306 +5,211 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\Validator;
-use Exception;
+use Illuminate\Support\Facades\Log;
 
 class CotizacionController extends Controller
 {
     public function crear(Request $request)
     {
         try {
-            // Validar estructura principal
-            $validator = Validator::make($request->all(), [
-                'cotizacion' => 'required|array',
-                'cotizacion.fecha' => 'required|date',
-                'cotizacion.header' => 'required|string',
-                'cotizacion.footer' => 'required|string',
-                'cotizacion.total' => 'required|numeric|min:0',
-                'cotizacion.cli_id' => 'required|integer',
-                'cotizacion.usu_id' => 'required|integer',
-                'cotizacion.mon_id' => 'integer|min:1',
-                'cotizacion.vnd_id' => 'nullable|integer',
-                'cotizacion.subtotal' => 'nullable|numeric|min:0',
-                'cotizacion.descuento' => 'nullable|numeric|min:0',
-                'cotizacion.status' => 'integer|in:0,1',
-                'cotizacion.img' => 'boolean',
-                'cotizacion.caracteristicas' => 'boolean',
-                'cotizacion.desglosado' => 'boolean',
-                
-                // Validar detalles
-                'detalles' => 'required|array|min:1',
-                'detalles.*.art_id' => 'required|integer',
-                'detalles.*.clave' => 'required|string|max:45',
-                'detalles.*.descripcion' => 'required|string|max:1000',
-                'detalles.*.cantidad' => 'required|numeric|min:0.001',
-                'detalles.*.unidad' => 'required|string|max:5',
-                'detalles.*.precioCompra' => 'required|numeric|min:0',
-                'detalles.*.precioCon' => 'required|numeric|min:0',
-                'detalles.*.importeCompra' => 'required|numeric|min:0',
-                'detalles.*.importeCon' => 'required|numeric|min:0',
-                'detalles.*.diferencia' => 'required|numeric',
-                'detalles.*.utilidad' => 'required|numeric',
-                'detalles.*.orden' => 'required|integer|min:1',
-                
-                // Validar impuestos (opcional)
-                'impuestos' => 'nullable|array',
-                'impuestos.*.imp_id' => 'required_with:impuestos|integer',
-                'impuestos.*.total' => 'required_with:impuestos|numeric|min:0',
-                'impuestos.*.subtotal' => 'required_with:impuestos|numeric|min:0',
-                'impuestos.*.tras' => 'required_with:impuestos|boolean',
-                'impuestos.*.orden' => 'required_with:impuestos|integer|min:1',
+            // 1. VALIDAR DATOS (siguiendo patrón de PedidoController)
+            $datos = $request->validate([
+                'cli_id' => 'required|integer',
+                'vnd_id' => 'nullable|integer',
+                'fecha' => 'required|date',
+                'header' => 'nullable|string',
+                'footer' => 'nullable|string',
+                'descuento' => 'nullable|numeric|min:0',
+                'articulos' => 'required|array|min:1',
+                'articulos.*.art_id' => 'required|integer',
+                'articulos.*.cantidad' => 'required|numeric|min:0.0001',
+                'articulos.*.precioCon' => 'required|numeric|min:0.000001',
+                'articulos.*.precioCompra' => 'nullable|numeric|min:0',
+                'opciones' => 'required|array',
+                'moneda' => 'nullable|array'
             ]);
 
-            if ($validator->fails()) {
-                return response()->json([
-                    'ok' => false,
-                    'mensaje' => 'Datos inválidos',
-                    'errores' => $validator->errors()
-                ], 400);
+            Log::info('TUNNEL: Creando cotización en SICAR', [
+                'cli_id' => $datos['cli_id'],
+                'articulos_count' => count($datos['articulos'])
+            ]);
+
+            // 2. VALIDAR FOREIGN KEYS
+            $cliente = DB::table('cliente')->where('cli_id', $datos['cli_id'])->where('status', 1)->first();
+            if (!$cliente) {
+                throw new \Exception("Cliente ID {$datos['cli_id']} no existe o está inactivo");
             }
 
-            // Iniciar transacción
+            foreach ($datos['articulos'] as $index => $articulo) {
+                $articuloDB = DB::table('articulo')->where('art_id', $articulo['art_id'])->where('status', 1)->first();
+                if (!$articuloDB) {
+                    throw new \Exception("Artículo ID {$articulo['art_id']} en posición {$index} no existe o está inactivo");
+                }
+            }
+
             DB::beginTransaction();
 
-            $cotizacionData = $request->input('cotizacion');
-            $detalles = $request->input('detalles');
-            $impuestos = $request->input('impuestos', []);
+            // 3. CALCULAR TOTALES
+            $totales = $this->calcularTotales($datos['articulos'], $datos['descuento'] ?? 0);
 
-            // 1. VALIDAR REFERENCIAS OBLIGATORIAS
-            $cliente = DB::table('cliente')
-                ->where('cli_id', $cotizacionData['cli_id'])
-                ->where('status', 1)
-                ->first();
+            // 4. INSERTAR COTIZACIÓN EN BD SICAR (tabla cotizacion)
+            $cotizacionId = $this->insertarCotizacion($datos, $totales);
 
-            if (!$cliente) {
-                throw new Exception("Cliente ID {$cotizacionData['cli_id']} no existe o está inactivo");
-            }
+            // 5. INSERTAR DETALLES EN BD SICAR (tabla detallecot)
+            $this->insertarDetalles($cotizacionId, $datos['articulos']);
 
-            $usuario = DB::table('usuario')
-                ->where('usu_id', $cotizacionData['usu_id'])
-                ->where('status', 1)
-                ->first();
-
-            if (!$usuario) {
-                throw new Exception("Usuario ID {$cotizacionData['usu_id']} no existe o está inactivo");
-            }
-
-            // Validar moneda (opcional, default = 1)
-            $monedaId = $cotizacionData['mon_id'] ?? 1;
-            $moneda = DB::table('moneda')
-                ->where('mon_id', $monedaId)
-                ->where('status', 1)
-                ->first();
-
-            if (!$moneda) {
-                throw new Exception("Moneda ID {$monedaId} no existe o está inactiva");
-            }
-
-            // Validar vendedor (opcional)
-            if (!empty($cotizacionData['vnd_id'])) {
-                $vendedor = DB::table('vendedor')
-                    ->where('vnd_id', $cotizacionData['vnd_id'])
-                    ->where('status', 1)
-                    ->first();
-
-                if (!$vendedor) {
-                    throw new Exception("Vendedor ID {$cotizacionData['vnd_id']} no existe o está inactivo");
-                }
-            }
-
-            // 2. VALIDAR ARTÍCULOS EN DETALLES
-            foreach ($detalles as $index => $detalle) {
-                $articulo = DB::table('articulo')
-                    ->where('art_id', $detalle['art_id'])
-                    ->where('status', 1)
-                    ->first();
-
-                if (!$articulo) {
-                    throw new Exception("Artículo ID {$detalle['art_id']} en detalle #{$index} no existe o está inactivo");
-                }
-
-                // Validar existencia suficiente
-                if ($articulo->existencia < $detalle['cantidad']) {
-                    throw new Exception("Artículo {$articulo->clave} no tiene existencia suficiente. Disponible: {$articulo->existencia}, Solicitado: {$detalle['cantidad']}");
-                }
-            }
-
-            // 3. CALCULAR SUBTOTAL AUTOMÁTICO DESDE DETALLES
-            $subtotalCalculado = 0;
-            foreach ($detalles as $detalle) {
-                $subtotalCalculado += ($detalle['cantidad'] * $detalle['precioCon']);
-            }
-
-            // 4. INSERTAR COTIZACIÓN PRINCIPAL CON VALORES SEGUROS
-            $cotizacionInsert = [
-                'fecha' => $cotizacionData['fecha'],
-                'header' => $cotizacionData['header'],
-                'footer' => $cotizacionData['footer'],
-                'total' => $cotizacionData['total'],
-                'status' => $cotizacionData['status'] ?? 1,
-                'img' => $cotizacionData['img'] ?? 0,
-                'caracteristicas' => $cotizacionData['caracteristicas'] ?? 0,
-                'desglosado' => $cotizacionData['desglosado'] ?? 0,
-                'cli_id' => $cotizacionData['cli_id'],
-                'usu_id' => $cotizacionData['usu_id'],
-                'mon_id' => $monedaId,
-                'vnd_id' => $cotizacionData['vnd_id'] ?? null,
-                // ✅ CORRECCIÓN CRÍTICA: Usar valores calculados/seguros en lugar de NULL
-                'subtotal' => $cotizacionData['subtotal'] ?? $subtotalCalculado,
-                'descuento' => $cotizacionData['descuento'] ?? 0.00,
-                'monAbr' => $moneda->abr,
-                'monTipoCambio' => $moneda->tipoCambio,
-                'mosDescuento' => $cotizacionData['mosDescuento'] ?? 0,
-                'mosPeso' => $cotizacionData['mosPeso'] ?? 0,
-                'impuestos' => $cotizacionData['aplicarImpuestos'] ?? 0,
-                'mosFirma' => $cotizacionData['mosFirma'] ?? 1,
-                'leyendaImpuestos' => $cotizacionData['leyendaImpuestos'] ?? 1,
-                'mosParidad' => $cotizacionData['mosParidad'] ?? 0,
-                'bloqueada' => $cotizacionData['bloqueada'] ?? 0,
-                'mosDetallePaq' => $cotizacionData['mosDetallePaq'] ?? 0,
-                'mosClaveArt' => $cotizacionData['mosClaveArt'] ?? 1,
-                'mosPreAntDesc' => $cotizacionData['mosPreAntDesc'] ?? 0,
-                // ✅ CORRECCIÓN CRÍTICA: Agregar peso=0.0000 para evitar cuelgues SICAR
-                'peso' => $cotizacionData['peso'] ?? 0.0000,
-            ];
-
-            $cotizacionId = DB::table('cotizacion')->insertGetId($cotizacionInsert);
-
-            if (!$cotizacionId) {
-                throw new Exception('Error al insertar la cotización principal');
-            }
-
-            // 5. INSERTAR DETALLES DE ARTÍCULOS
-            foreach ($detalles as $detalle) {
-                // ✅ CALCULAR PRECIOS FALTANTES CRÍTICOS PARA SICAR
-                $precioSin = $detalle['precioSin'] ?? $detalle['precioCon'];
-                $precioNorSin = $detalle['precioNorSin'] ?? $detalle['precioCon'];
-                $precioNorCon = $detalle['precioNorCon'] ?? $detalle['precioCon'];
-                
-                $importeSin = $precioSin * $detalle['cantidad'];
-                $importeNorSin = $precioNorSin * $detalle['cantidad'];
-                $importeNorCon = $precioNorCon * $detalle['cantidad'];
-                
-                $detalleInsert = [
-                    'cot_id' => $cotizacionId,
-                    'art_id' => $detalle['art_id'],
-                    'clave' => $detalle['clave'],
-                    'descripcion' => $detalle['descripcion'],
-                    'cantidad' => $detalle['cantidad'],
-                    'unidad' => $detalle['unidad'],
-                    'precioCompra' => $detalle['precioCompra'],
-                    'precioCon' => $detalle['precioCon'],
-                    'importeCompra' => $detalle['importeCompra'],
-                    'importeCon' => $detalle['importeCon'],
-                    'diferencia' => $detalle['diferencia'],
-                    'utilidad' => $detalle['utilidad'],
-                    'descPorcentaje' => $detalle['descPorcentaje'] ?? 0.00,
-                    'descTotal' => $detalle['descTotal'] ?? 0.00,
-                    'caracteristicas' => $detalle['caracteristicas'] ?? null,
-                    'orden' => $detalle['orden'],
-                    // ✅ CORRECCIÓN CRÍTICA: Calcular precios faltantes para evitar NULL
-                    'precioNorSin' => $precioNorSin,
-                    'precioNorCon' => $precioNorCon,
-                    'precioSin' => $precioSin,
-                    'importeNorSin' => $importeSin,
-                    'importeNorCon' => $importeNorCon,
-                    'importeSin' => $importeSin,
-                    'monPrecioNorSin' => $detalle['monPrecioNorSin'] ?? null,
-                    'monPrecioNorCon' => $detalle['monPrecioNorCon'] ?? null,
-                    'monPrecioSin' => $detalle['monPrecioSin'] ?? null,
-                    'monPrecioCon' => $detalle['monPrecioCon'] ?? null,
-                    'monImporteNorSin' => $detalle['monImporteNorSin'] ?? null,
-                    'monImporteNorCon' => $detalle['monImporteNorCon'] ?? null,
-                    'monImporteSin' => $detalle['monImporteSin'] ?? null,
-                    'monImporteCon' => $detalle['monImporteCon'] ?? null,
-                ];
-
-                $detalleResult = DB::table('detallecot')->insert($detalleInsert);
-                
-                if (!$detalleResult) {
-                    throw new Exception("Error al insertar detalle del artículo {$detalle['clave']}");
-                }
-            }
-
-            // 6. INSERTAR IMPUESTOS EN COTIZACIONIMP (si los hay)
-            if (!empty($impuestos)) {
-                foreach ($impuestos as $impuesto) {
-                    $impuestoInsert = [
-                        'cot_id' => $cotizacionId,
-                        'imp_id' => $impuesto['imp_id'],
-                        'total' => $impuesto['total'],
-                        'subtotal' => $impuesto['subtotal'],
-                        'tras' => $impuesto['tras'] ? 1 : 0,
-                        'orden' => $impuesto['orden'],
-                        'monTotal' => $impuesto['monTotal'] ?? null,
-                        'monSubtotal' => $impuesto['monSubtotal'] ?? null,
-                    ];
-
-                    $impuestoResult = DB::table('cotizacionimp')->insert($impuestoInsert);
-                    
-                    if (!$impuestoResult) {
-                        throw new Exception("Error al insertar impuesto ID {$impuesto['imp_id']}");
-                    }
-                }
-            }
-
-            // 7. INSERTAR RELACIÓN DETALLECOTIMPUESTO (CRÍTICO PARA SICAR)
-            if (!empty($impuestos)) {
-                foreach ($impuestos as $impuesto) {
-                    // Para cada impuesto, vincularlo con todos los artículos de la cotización
-                    foreach ($detalles as $detalle) {
-                        $detalleImpuestoInsert = [
-                            'cot_id' => $cotizacionId,
-                            'art_id' => $detalle['art_id'],
-                            'imp_id' => $impuesto['imp_id']
-                        ];
-
-                        $detalleImpuestoResult = DB::table('detallecotimpuesto')->insert($detalleImpuestoInsert);
-                        
-                        if (!$detalleImpuestoResult) {
-                            throw new Exception("Error al insertar relación detalle-impuesto: Art {$detalle['art_id']} + Imp {$impuesto['imp_id']}");
-                        }
-                    }
-                }
-            }
-
-            // 8. Confirmar transacción
             DB::commit();
 
-            // Obtener la cotización completa para respuesta
-            $cotizacionCompleta = DB::table('cotizacion as c')
-                ->select(
-                    'c.*',
-                    'cl.nombre as cliente_nombre',
-                    'cl.rfc as cliente_rfc',
-                    'u.nombre as usuario_nombre',
-                    'm.moneda as moneda_nombre',
-                    'v.nombre as vendedor_nombre'
-                )
-                ->join('cliente as cl', 'c.cli_id', '=', 'cl.cli_id')
-                ->join('usuario as u', 'c.usu_id', '=', 'u.usu_id')
-                ->join('moneda as m', 'c.mon_id', '=', 'm.mon_id')
-                ->leftJoin('vendedor as v', 'c.vnd_id', '=', 'v.vnd_id')
-                ->where('c.cot_id', $cotizacionId)
-                ->first();
-
-            return response()->json([
-                'ok' => true,
-                'mensaje' => 'Cotización creada exitosamente',
+            Log::info('TUNNEL: Cotización creada exitosamente', [
                 'cot_id' => $cotizacionId,
-                'cotizacion' => $cotizacionCompleta,
-                'total_detalles' => count($detalles),
-                'total_impuestos' => count($impuestos)
-            ], 201);
+                'total' => $totales['total']
+            ]);
 
-        } catch (Exception $e) {
+            // 6. RETORNAR RESPUESTA CON ESTRUCTURA REQUERIDA POR CUSPI
+            return response()->json([
+                'success' => true,
+                'mensaje' => 'Cotización creada correctamente en SICAR',
+                'cotizacion' => [
+                    'cot_id' => $cotizacionId,
+                    'total' => $totales['total'],
+                    'subtotal' => $totales['subtotal'],
+                    'fecha' => $datos['fecha'],
+                    'cliente' => $this->getClienteNombre($datos['cli_id']),
+                    'articulos_count' => count($datos['articulos'])
+                ]
+            ]);
+
+        } catch (\Exception $e) {
             DB::rollBack();
             
+            Log::error('TUNNEL: Error al crear cotización', [
+                'error' => $e->getMessage(),
+                'cli_id' => $request->input('cli_id', 'N/A')
+            ]);
+
             return response()->json([
-                'ok' => false,
-                'mensaje' => 'Error al crear cotización: ' . $e->getMessage(),
-                'error_code' => 'COTIZACION_ERROR'
-            ], 500);
+                'success' => false,
+                'error' => $e->getMessage()
+            ], 400);
         }
+    }
+
+    private function calcularTotales($articulos, $descuento)
+    {
+        $subtotal = 0;
+        foreach ($articulos as $articulo) {
+            $subtotal += $articulo['cantidad'] * $articulo['precioCon'];
+        }
+        $total = $subtotal - $descuento;
+        
+        return [
+            'subtotal' => number_format($subtotal, 2, '.', ''),
+            'descuento' => number_format($descuento, 2, '.', ''),
+            'total' => number_format($total, 2, '.', '')
+        ];
+    }
+
+    private function insertarCotizacion($datos, $totales)
+    {
+        // USAR ESTRUCTURA EXACTA DE BD SICAR (34 campos)
+        $cotizacion = [
+            'fecha' => $datos['fecha'],
+            'header' => $datos['header'] ?? '',
+            'footer' => $datos['footer'] ?? '',
+            'subtotal' => $totales['subtotal'],
+            'descuento' => $totales['descuento'],
+            'total' => $totales['total'],
+            'monSubtotal' => null,
+            'monDescuento' => null,
+            'monTotal' => null,
+            'monAbr' => $datos['moneda']['monAbr'] ?? 'MXN',
+            'monTipoCambio' => $datos['moneda']['monTipoCambio'] ?? 1.000000,
+            'peso' => 0.0000,
+            'status' => 1,
+            // OPCIONES (usar las recibidas de CUSPI)
+            'img' => $datos['opciones']['img'] ?? 1,
+            'caracteristicas' => $datos['opciones']['caracteristicas'] ?? 0,
+            'desglosado' => $datos['opciones']['desglosado'] ?? 1,
+            'mosDescuento' => $datos['opciones']['mosDescuento'] ?? 0,
+            'mosPeso' => $datos['opciones']['mosPeso'] ?? 1,
+            'impuestos' => $datos['opciones']['impuestos'] ?? 1,
+            'mosFirma' => $datos['opciones']['mosFirma'] ?? 1,
+            'leyendaImpuestos' => $datos['opciones']['leyendaImpuestos'] ?? 0,
+            'mosParidad' => $datos['opciones']['mosParidad'] ?? 0,
+            'bloqueada' => $datos['opciones']['bloqueada'] ?? 0,
+            'mosDetallePaq' => $datos['opciones']['mosDetallePaq'] ?? 0,
+            'mosClaveArt' => $datos['opciones']['mosClaveArt'] ?? 1,
+            'mosPreAntDesc' => $datos['opciones']['mosPreAntDesc'] ?? 0,
+            'folioMovil' => null,
+            'serieMovil' => null,
+            'totalSipa' => null,
+            // FOREIGN KEYS
+            'usu_id' => 1, // Usuario por defecto TUNNEL
+            'cli_id' => $datos['cli_id'],
+            'mon_id' => $datos['moneda']['mon_id'] ?? 1,
+            'vnd_id' => $datos['vnd_id'] ?? null
+        ];
+
+        return DB::table('cotizacion')->insertGetId($cotizacion);
+    }
+
+    private function insertarDetalles($cotizacionId, $articulos)
+    {
+        foreach ($articulos as $orden => $articulo) {
+            // Obtener datos del artículo
+            $articuloDB = DB::table('articulo')->where('art_id', $articulo['art_id'])->first();
+            
+            $cantidad = floatval($articulo['cantidad']);
+            $precioCon = floatval($articulo['precioCon']);
+            $precioCompra = floatval($articulo['precioCompra'] ?? $articuloDB->precioCompra ?? 0);
+            
+            // Cálculos
+            $importeCon = $cantidad * $precioCon;
+            $importeCompra = $cantidad * $precioCompra;
+            $diferencia = $importeCon - $importeCompra;
+            $utilidad = $importeCompra > 0 ? (($diferencia / $importeCompra) * 100) : 0;
+
+            // USAR ESTRUCTURA EXACTA DE BD SICAR (30 campos)
+            $detalle = [
+                'cot_id' => $cotizacionId,
+                'art_id' => $articulo['art_id'],
+                'clave' => $articuloDB->clave,
+                'descripcion' => $articuloDB->descripcion,
+                'cantidad' => number_format($cantidad, 3, '.', ''),
+                'unidad' => $articuloDB->unidadVenta ?? 'PZA',
+                'precioCompra' => number_format($precioCompra, 2, '.', ''),
+                'precioNorSin' => null,
+                'precioNorCon' => null,
+                'precioSin' => null,
+                'precioCon' => number_format($precioCon, 2, '.', ''),
+                'importeCompra' => number_format($importeCompra, 2, '.', ''),
+                'importeNorSin' => null,
+                'importeNorCon' => null,
+                'importeSin' => null,
+                'importeCon' => number_format($importeCon, 2, '.', ''),
+                'monPrecioNorSin' => null,
+                'monPrecioNorCon' => null,
+                'monPrecioSin' => null,
+                'monPrecioCon' => null,
+                'monImporteNorSin' => null,
+                'monImporteNorCon' => null,
+                'monImporteSin' => null,
+                'monImporteCon' => null,
+                'diferencia' => number_format($diferencia, 2, '.', ''),
+                'utilidad' => number_format($utilidad, 6, '.', ''),
+                'descPorcentaje' => 0.00,
+                'descTotal' => 0.00,
+                'caracteristicas' => null,
+                'orden' => $orden + 1
+            ];
+
+            DB::table('detallecot')->insert($detalle);
+        }
+    }
+
+    private function getClienteNombre($cliId)
+    {
+        $cliente = DB::table('cliente')->where('cli_id', $cliId)->first();
+        return $cliente ? $cliente->nombre : 'Cliente desconocido';
     }
 }

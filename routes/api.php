@@ -22,7 +22,7 @@ use App\Http\Controllers\Api\PedidoController;
 Route::middleware('validate.apikey')->group(function() {
 
     Route::post('/existencia', [TunnelController::class, 'existencia']);
-    Route::post('/cotizacion/crear', [CotizacionController::class, 'crear']);
+    Route::post('/cotizaciones/crear', [CotizacionController::class, 'crear']);
     Route::post('/articulo/asignar-proveedor', [ArticuloController::class, 'asignarProveedor']);
     Route::post('/articulo/asignar-proveedor-masivo', [ArticuloController::class, 'asignarProveedorMasivo']);
     Route::post('/pedidos/crear', [PedidoController::class, 'crear']);
