@@ -139,7 +139,7 @@ class CotizacionController extends Controller
             'bloqueada' => $datos['opciones']['bloqueada'] ?? 0,
             'mosDetallePaq' => $datos['opciones']['mosDetallePaq'] ?? 0,
             'mosClaveArt' => $datos['opciones']['mosClaveArt'] ?? 1,
-            'mosPreAntDesc' => $datos['opciones']['mosPreAntDesc'] ?? 0,
+            'mosPreAntDesc' => $datos['opciones']['mosPreAntDesc'] ?? 1,
             'folioMovil' => null,
             'serieMovil' => null,
             'totalSipa' => null,
@@ -170,6 +170,7 @@ class CotizacionController extends Controller
             $utilidad = $importeCompra > 0 ? (($diferencia / $importeCompra) * 100) : 0;
 
             // USAR ESTRUCTURA EXACTA DE BD SICAR (30 campos)
+            // Siguiendo patrones de cotizaciones reales: precioNorSin = precioSin = precioCon
             $detalle = [
                 'cot_id' => $cotizacionId,
                 'art_id' => $articulo['art_id'],
@@ -178,14 +179,14 @@ class CotizacionController extends Controller
                 'cantidad' => number_format($cantidad, 3, '.', ''),
                 'unidad' => $articuloDB->unidadVenta ?? 'PZA',
                 'precioCompra' => number_format($precioCompra, 2, '.', ''),
-                'precioNorSin' => null,
-                'precioNorCon' => null,
-                'precioSin' => null,
+                'precioNorSin' => number_format($precioCon, 2, '.', ''), // = precioCon según datos reales
+                'precioNorCon' => number_format($precioCon, 2, '.', ''), // = precioCon según datos reales
+                'precioSin' => number_format($precioCon, 2, '.', ''),    // = precioCon según datos reales
                 'precioCon' => number_format($precioCon, 2, '.', ''),
                 'importeCompra' => number_format($importeCompra, 2, '.', ''),
-                'importeNorSin' => null,
-                'importeNorCon' => null,
-                'importeSin' => null,
+                'importeNorSin' => number_format($importeCon, 2, '.', ''), // = importeCon según datos reales
+                'importeNorCon' => number_format($importeCon, 2, '.', ''), // = importeCon según datos reales
+                'importeSin' => number_format($importeCon, 2, '.', ''),    // = importeCon según datos reales
                 'importeCon' => number_format($importeCon, 2, '.', ''),
                 'monPrecioNorSin' => null,
                 'monPrecioNorCon' => null,
@@ -200,7 +201,7 @@ class CotizacionController extends Controller
                 'descPorcentaje' => 0.00,
                 'descTotal' => 0.00,
                 'caracteristicas' => null,
-                'orden' => $orden + 1
+                'orden' => $orden  // Empezar en 0 según datos reales, no en 1
             ];
 
             DB::table('detallecot')->insert($detalle);
