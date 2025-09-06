@@ -12,20 +12,20 @@ class CotizacionController extends Controller
     public function crear(Request $request)
     {
         try {
-            // 1. VALIDAR DATOS (siguiendo patrón de PedidoController)
+            // 1. VALIDAR DATOS (menos opciones porque las obtendremos de SICAR)
             $datos = $request->validate([
                 'cli_id' => 'required|integer',
                 'vnd_id' => 'nullable|integer',
                 'fecha' => 'required|date',
-                'header' => 'nullable|string',
-                'footer' => 'nullable|string',
+                'header' => 'nullable|string',                      // Opcional - usar config si no viene
+                'footer' => 'nullable|string',                      // Opcional - usar config si no viene
                 'descuento' => 'nullable|numeric|min:0',
                 'articulos' => 'required|array|min:1',
                 'articulos.*.art_id' => 'required|integer',
                 'articulos.*.cantidad' => 'required|numeric|min:0.0001',
                 'articulos.*.precioCon' => 'required|numeric|min:0.000001',
                 'articulos.*.precioCompra' => 'nullable|numeric|min:0',
-                'opciones' => 'required|array',
+                'opciones' => 'nullable|array',                    // Opcional - solo para casos específicos
                 'moneda' => 'nullable|array'
             ]);
 
@@ -117,11 +117,14 @@ class CotizacionController extends Controller
             throw new \Exception("Usuario ID 1 no existe o está inactivo");
         }
 
-        // USAR ESTRUCTURA EXACTA DE BD SICAR (34 campos)
+        // OBTENER CONFIGURACIÓN REAL DE SICAR
+        $configSicar = $this->obtenerConfiguracionSicar();
+        
+        // USAR CONFIGURACIÓN DE SICAR EN LUGAR DE HARDCODEAR
         $cotizacion = [
             'fecha' => $datos['fecha'],
-            'header' => $datos['header'] ?? '',
-            'footer' => $datos['footer'] ?? '',
+            'header' => $datos['header'] ?? $configSicar['header'],        // Usar config SICAR
+            'footer' => $datos['footer'] ?? $configSicar['footer'],        // Usar config SICAR
             'subtotal' => $totales['subtotal'],
             'descuento' => $totales['descuento'],
             'total' => $totales['total'],
@@ -132,25 +135,26 @@ class CotizacionController extends Controller
             'monTipoCambio' => $datos['moneda']['monTipoCambio'] ?? 1.000000,
             'peso' => null,
             'status' => 1,
-            // OPCIONES CON DEFAULTS CORRECTOS DE SICAR
-            'img' => $datos['opciones']['img'] ?? 0,
-            'caracteristicas' => $datos['opciones']['caracteristicas'] ?? 0,
-            'desglosado' => $datos['opciones']['desglosado'] ?? 1,
-            'mosDescuento' => $datos['opciones']['mosDescuento'] ?? 0,
-            'mosPeso' => $datos['opciones']['mosPeso'] ?? 0,
-            'impuestos' => $datos['opciones']['impuestos'] ?? 0,
-            'mosFirma' => $datos['opciones']['mosFirma'] ?? 1,
-            'leyendaImpuestos' => $datos['opciones']['leyendaImpuestos'] ?? 1,
-            'mosParidad' => $datos['opciones']['mosParidad'] ?? 0,
-            'bloqueada' => $datos['opciones']['bloqueada'] ?? 0,
-            'mosDetallePaq' => $datos['opciones']['mosDetallePaq'] ?? 0,
-            'mosClaveArt' => $datos['opciones']['mosClaveArt'] ?? 1,
-            'mosPreAntDesc' => $datos['opciones']['mosPreAntDesc'] ?? 0,
+            
+            // USAR CONFIGURACIÓN REAL DE SICAR (NO HARDCODEAR)
+            'img' => $configSicar['img'],                                  // Desde ventaconf.cotMosImg
+            'caracteristicas' => $configSicar['caracteristicas'],          // Desde ventaconf.cotMosCar
+            'desglosado' => $configSicar['desglosado'],                    // Desde ventaconf.cotDesglosar
+            'mosDescuento' => $configSicar['mosDescuento'],                // Desde ventaconf.cotDescuento
+            'mosPeso' => $configSicar['mosPeso'],                          // Desde ventaconf.cotPeso
+            'impuestos' => $datos['opciones']['impuestos'] ?? 0,           // Este puede ser específico
+            'mosFirma' => $configSicar['mosFirma'],                        // Desde ventaconf.cotMosFirma
+            'leyendaImpuestos' => $configSicar['leyendaImpuestos'],        // Desde ventaconf.cotLeyendaImpuestos
+            'mosParidad' => $configSicar['mosParidad'],                    // Desde ventaconf.cotMosParidad
+            'bloqueada' => $configSicar['bloqueada'],                      // Desde ventaconf.cotBloquear
+            'mosDetallePaq' => $configSicar['mosDetallePaq'],              // Desde ventaconf.cotMosDetallePaq
+            'mosClaveArt' => $configSicar['mosClaveArt'],                  // Desde ventaconf.cotMosClaveArt
+            'mosPreAntDesc' => $configSicar['mosPreAntDesc'],              // Desde ventaconf.cotMosPreAntDesc
+            
             'folioMovil' => null,
             'serieMovil' => null,
             'totalSipa' => null,
-            // FOREIGN KEYS
-            'usu_id' => 1, // Usuario por defecto TUNNEL
+            'usu_id' => 1,
             'cli_id' => $datos['cli_id'],
             'mon_id' => $datos['moneda']['mon_id'] ?? 1,
             'vnd_id' => $datos['vnd_id'] ?? null
@@ -212,6 +216,34 @@ class CotizacionController extends Controller
 
             DB::table('detallecot')->insert($detalle);
         }
+    }
+
+    private function obtenerConfiguracionSicar() 
+    {
+        // Obtener configuración de ventas/cotizaciones de SICAR
+        $config = DB::table('ventaconf')->first();
+        
+        if (!$config) {
+            throw new \Exception("No se encontró configuración de SICAR en tabla ventaconf");
+        }
+        
+        return [
+            'img' => $config->cotMosImg,
+            'caracteristicas' => $config->cotMosCar,
+            'desglosado' => $config->cotDesglosar,
+            'mosDescuento' => $config->cotDescuento,
+            'mosPeso' => $config->cotPeso,
+            'impuestos' => 0, // Este parece ser específico por cotización
+            'mosFirma' => $config->cotMosFirma,
+            'leyendaImpuestos' => $config->cotLeyendaImpuestos,
+            'mosParidad' => $config->cotMosParidad,
+            'bloqueada' => $config->cotBloquear,
+            'mosDetallePaq' => $config->cotMosDetallePaq,
+            'mosClaveArt' => $config->cotMosClaveArt,
+            'mosPreAntDesc' => $config->cotMosPreAntDesc ?? 0,
+            'header' => $config->cotHeader ?? '',
+            'footer' => $config->cotFooter ?? ''
+        ];
     }
 
     private function getClienteNombre($cliId)
