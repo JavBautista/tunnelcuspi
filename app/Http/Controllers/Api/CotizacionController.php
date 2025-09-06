@@ -111,6 +111,12 @@ class CotizacionController extends Controller
 
     private function insertarCotizacion($datos, $totales)
     {
+        // VALIDAR USUARIO ANTES DE INSERTAR
+        $usuario = DB::table('usuario')->where('usu_id', 1)->where('status', 1)->first();
+        if (!$usuario) {
+            throw new \Exception("Usuario ID 1 no existe o está inactivo");
+        }
+
         // USAR ESTRUCTURA EXACTA DE BD SICAR (34 campos)
         $cotizacion = [
             'fecha' => $datos['fecha'],
@@ -124,22 +130,22 @@ class CotizacionController extends Controller
             'monTotal' => null,
             'monAbr' => $datos['moneda']['monAbr'] ?? 'MXN',
             'monTipoCambio' => $datos['moneda']['monTipoCambio'] ?? 1.000000,
-            'peso' => 0.0000,
+            'peso' => null,
             'status' => 1,
-            // OPCIONES (usar las recibidas de CUSPI)
-            'img' => $datos['opciones']['img'] ?? 1,
+            // OPCIONES CON DEFAULTS CORRECTOS DE SICAR
+            'img' => $datos['opciones']['img'] ?? 0,
             'caracteristicas' => $datos['opciones']['caracteristicas'] ?? 0,
             'desglosado' => $datos['opciones']['desglosado'] ?? 1,
             'mosDescuento' => $datos['opciones']['mosDescuento'] ?? 0,
-            'mosPeso' => $datos['opciones']['mosPeso'] ?? 1,
-            'impuestos' => $datos['opciones']['impuestos'] ?? 1,
+            'mosPeso' => $datos['opciones']['mosPeso'] ?? 0,
+            'impuestos' => $datos['opciones']['impuestos'] ?? 0,
             'mosFirma' => $datos['opciones']['mosFirma'] ?? 1,
-            'leyendaImpuestos' => $datos['opciones']['leyendaImpuestos'] ?? 0,
+            'leyendaImpuestos' => $datos['opciones']['leyendaImpuestos'] ?? 1,
             'mosParidad' => $datos['opciones']['mosParidad'] ?? 0,
             'bloqueada' => $datos['opciones']['bloqueada'] ?? 0,
             'mosDetallePaq' => $datos['opciones']['mosDetallePaq'] ?? 0,
             'mosClaveArt' => $datos['opciones']['mosClaveArt'] ?? 1,
-            'mosPreAntDesc' => $datos['opciones']['mosPreAntDesc'] ?? 1,
+            'mosPreAntDesc' => $datos['opciones']['mosPreAntDesc'] ?? 0,
             'folioMovil' => null,
             'serieMovil' => null,
             'totalSipa' => null,
@@ -201,7 +207,7 @@ class CotizacionController extends Controller
                 'descPorcentaje' => 0.00,
                 'descTotal' => 0.00,
                 'caracteristicas' => null,
-                'orden' => $orden  // Empezar en 0 según datos reales, no en 1
+                'orden' => $orden + 1  // SICAR espera que empiece en 1, no en 0
             ];
 
             DB::table('detallecot')->insert($detalle);
