@@ -282,14 +282,14 @@ class CotizacionController extends Controller
             'header' => $datos['header'] ?? $config['cotHeader'],       // Header desde CUSPI o config
             'footer' => $datos['footer'] ?? $config['cotFooter'],       // Footer desde CUSPI o config
             'subtotal' => $totales['subtotal'],                         // Calculado desde artículos
-            'descuento' => $totales['descuento'],                       // Desde CUSPI
+            'descuento' => $totales['descuento'] == '0.00' ? null : $totales['descuento'],  // ✅ CRÍTICO: null si es 0
             'total' => $totales['total'],                               // Calculado
             'monSubtotal' => null,                                      // null en cotizaciones normales
             'monDescuento' => null,                                     // null en cotizaciones normales
             'monTotal' => null,                                         // null en cotizaciones normales
             'monAbr' => $monedaFinal['abreviacion'],                    // Desde moneda seleccionada
             'monTipoCambio' => $monedaFinal['tipoCambio'],             // Desde moneda seleccionada
-            'peso' => null,                                             // null en cotizaciones normales
+            'peso' => null,                                             // ✅ CRÍTICO: null, no 0.0000
             'status' => 1,                                              // 1 = activa
             'img' => $config['cotMosImg'],                              // desde ventaconf
             'caracteristicas' => $config['cotMosCar'],                  // desde ventaconf
@@ -367,8 +367,8 @@ class CotizacionController extends Controller
                 'monImporteCon' => null,
                 'diferencia' => number_format($diferencia, 2, '.', ''),
                 'utilidad' => number_format($utilidad, 6, '.', ''),
-                'descPorcentaje' => 0.00,
-                'descTotal' => 0.00,
+                'descPorcentaje' => null,  // ✅ CRÍTICO: null, no 0.00
+                'descTotal' => null,      // ✅ CRÍTICO: null, no 0.00
                 'caracteristicas' => null,
                 'orden' => $orden + 1  // SICAR espera que empiece en 1, no en 0
             ];
@@ -416,6 +416,108 @@ class CotizacionController extends Controller
      * Basado en /home/dev/Proyectos/dev_sicar/FLUJO_EXACTO_NUEVA_COTIZACION.md
      */
     public function crearCotizacionComoSicar()
+    {
+        try {
+            Log::info('TUNNEL: Iniciando creación de cotización usando flujo exacto de SICAR');
+
+            DB::beginTransaction();
+
+            // 1. OBTENER CONFIGURACIÓN DE VENTACONF (como lo hace SICAR)
+            $config = $this->obtenerConfiguracionVentaConf();
+            
+            // 2. OBTENER MONEDA POR DEFECTO
+            $monedaDefault = $this->obtenerMonedaPorDefecto();
+            
+            // 3. OBTENER CLIENTE POR DEFECTO ("PÚBLICO EN GENERAL")
+            $clienteDefault = $this->obtenerClientePorDefecto();
+            
+            // 4. OBTENER USUARIO (por ahora usamos ID 1)
+            $usuario = $this->obtenerUsuario();
+
+            // 5. CREAR COTIZACIÓN CON CONSTRUCTOR COMPLETO (TODOS LOS 34 CAMPOS)
+            $cotizacion = [
+                // NO incluir cot_id - es AUTO_INCREMENT
+                'fecha' => date('Y-m-d'),                           // new Date()
+                'header' => $config['cotHeader'],                   // desde ventaconf
+                'footer' => $config['cotFooter'],                   // desde ventaconf
+                'subtotal' => '0.00',                               // BigDecimal.ZERO
+                'descuento' => null,                                // null en cotizaciones nuevas
+                'total' => '0.00',                                  // BigDecimal.ZERO
+                'monSubtotal' => null,                              // null en cotizaciones nuevas
+                'monDescuento' => null,                             // null en cotizaciones nuevas
+                'monTotal' => null,                                 // null en cotizaciones nuevas
+                'monAbr' => $monedaDefault['abreviacion'],          // "MXN"
+                'monTipoCambio' => $monedaDefault['tipoCambio'],    // 1.000000
+                'peso' => null,                                     // null en cotizaciones nuevas
+                'status' => 1,                                      // 1 = activa
+                'img' => $config['cotMosImg'],                      // desde ventaconf
+                'caracteristicas' => $config['cotMosCar'],          // desde ventaconf
+                'desglosado' => $config['cotDesglosar'],            // desde ventaconf
+                'mosDescuento' => $config['cotDescuento'],          // desde ventaconf
+                'mosPeso' => $config['cotPeso'],                    // desde ventaconf
+                'impuestos' => 0,                                   // 0 por defecto en nuevas
+                'mosFirma' => $config['cotMosFirma'],               // desde ventaconf
+                'leyendaImpuestos' => $config['cotLeyendaImpuestos'], // desde ventaconf
+                'mosParidad' => $config['cotMosParidad'],           // desde ventaconf
+                'bloqueada' => 0,                                   // 0 = no bloqueada al crear
+                'mosDetallePaq' => $config['cotMosDetallePaq'],     // desde ventaconf
+                'mosClaveArt' => $config['cotMosClaveArt'],         // desde ventaconf
+                'folioMovil' => null,                               // null (no se usa)
+                'serieMovil' => null,                               // null (no se usa)
+                'totalSipa' => null,                                // null (no hay SIPA al crear)
+                'mosPreAntDesc' => $config['cotMosPreAntDesc'],     // desde ventaconf
+                'usu_id' => $usuario['usu_id'],                     // ID del usuario
+                'cli_id' => $clienteDefault['cli_id'],              // ID cliente por defecto
+                'mon_id' => $monedaDefault['mon_id'],               // ID moneda por defecto
+                'vnd_id' => $usuario['vnd_id']                      // ID vendedor del usuario (puede ser null)
+            ];
+
+            // 6. GUARDAR COTIZACIÓN EN BD (EntityManager persist equivalente)
+            $cotizacionId = DB::table('cotizacion')->insertGetId($cotizacion);
+
+            // 7. CREAR HISTORIAL (como lo hace SICAR)
+            $this->crearHistorial($cotizacionId, $usuario);
+
+            DB::commit();
+
+            Log::info('TUNNEL: Cotización creada siguiendo flujo exacto de SICAR', [
+                'cot_id' => $cotizacionId,
+                'flujo' => 'SICAR_EXACTO',
+                'config_origen' => 'ventaconf'
+            ]);
+
+            // 8. RETORNAR RESPUESTA
+            return response()->json([
+                'success' => true,
+                'mensaje' => 'Cotización creada siguiendo flujo exacto de SICAR',
+                'cotizacion' => [
+                    'cot_id' => $cotizacionId,
+                    'fecha' => date('Y-m-d'),
+                    'cliente' => $clienteDefault['nombre'],
+                    'total' => '0.00',
+                    'subtotal' => '0.00',
+                    'moneda' => $monedaDefault['abreviacion'],
+                    'flujo' => 'SICAR_EXACTO'
+                ]
+            ]);
+
+        } catch (\Exception $e) {
+            DB::rollBack();
+            
+            Log::error('TUNNEL: Error al crear cotización con flujo SICAR', [
+                'error' => $e->getMessage(),
+                'flujo' => 'SICAR_EXACTO'
+            ]);
+
+            return response()->json([
+                'success' => false,
+                'error' => $e->getMessage(),
+                'flujo' => 'SICAR_EXACTO'
+            ], 400);
+        }
+    }
+
+    public function crearCotizacionVacia()
     {
         try {
             Log::info('TUNNEL: Iniciando creación de cotización usando flujo exacto de SICAR');
