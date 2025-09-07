@@ -29,7 +29,7 @@ Route::middleware('validate.apikey')->group(function() {
     
     Route::post('/cotizaciones/crear-sicar-vacio', [CotizacionController::class, 'crearCotizacionVacia']);
     
-    Route::post('/cotizaciones/{cot_id}/articulos', [CotizacionController::class, 'agregarArticuloACotizacion']);
+    Route::post('/cotizaciones/agregar-articulo', [CotizacionController::class, 'agregarArticuloACotizacion']);
     
     Route::post('/articulo/asignar-proveedor', [ArticuloController::class, 'asignarProveedor']);
     
