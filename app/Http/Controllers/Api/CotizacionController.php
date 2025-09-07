@@ -411,10 +411,7 @@ class CotizacionController extends Controller
         return $cliente ? $cliente->nombre : 'Cliente desconocido';
     }
 
-    /**
-     * NUEVO: Crear cotización siguiendo EXACTAMENTE el flujo de SICAR
-     * Basado en /home/dev/Proyectos/dev_sicar/FLUJO_EXACTO_NUEVA_COTIZACION.md
-     */
+    
     public function crearCotizacionComoSicar()
     {
         try {
@@ -517,6 +514,10 @@ class CotizacionController extends Controller
         }
     }
 
+    /**
+     * NUEVO: Crear cotización siguiendo EXACTAMENTE el flujo de SICAR
+     * Basado en /home/dev/Proyectos/dev_sicar/FLUJO_EXACTO_NUEVA_COTIZACION.md
+     */
     public function crearCotizacionVacia()
     {
         try {
@@ -743,6 +744,183 @@ class CotizacionController extends Controller
         Log::info('TUNNEL: Historial creado para cotización', [
             'cot_id' => $cotizacionId,
             'movimiento' => 'creación'
+        ]);
+    }
+
+    /**
+     * Agregar artículo a cotización existente siguiendo flujo exacto de SICAR
+     * Basado en análisis decompilado: FLUJO_EXACTO_NUEVA_COTIZACION_AGREGAR_ARTICULO.md
+     */
+    public function agregarArticuloACotizacion(Request $request)
+    {
+        try {
+            // 1. VALIDAR DATOS
+            $datos = $request->validate([
+                'cot_id' => 'required|integer',
+                'art_id' => 'required|integer',
+                'cantidad' => 'required|numeric|min:0.001'
+            ]);
+
+            DB::beginTransaction();
+
+            // 2. VALIDAR COTIZACIÓN EXISTE Y ESTÁ ACTIVA
+            $cotizacion = DB::table('cotizacion')
+                ->where('cot_id', $datos['cot_id'])
+                ->where('status', 1)
+                ->first();
+            
+            if (!$cotizacion) {
+                throw new \Exception("Cotización ID {$datos['cot_id']} no existe o está inactiva");
+            }
+
+            // 3. VALIDAR ARTÍCULO EXISTE Y ESTÁ ACTIVO
+            $articulo = DB::table('articulo')
+                ->where('art_id', $datos['art_id'])
+                ->where('status', 1)
+                ->first();
+                
+            if (!$articulo) {
+                throw new \Exception("Artículo ID {$datos['art_id']} no existe o está inactivo");
+            }
+
+            // 4. VALIDAR QUE ARTÍCULO NO ESTÉ YA EN LA COTIZACIÓN (PRIMARY KEY)
+            $detalleExiste = DB::table('detallecot')
+                ->where('cot_id', $datos['cot_id'])
+                ->where('art_id', $datos['art_id'])
+                ->first();
+                
+            if ($detalleExiste) {
+                throw new \Exception("El artículo ya está en la cotización");
+            }
+
+            // 5. CALCULAR IMPORTES CON FÓRMULA REAL DE SICAR
+            $cantidad = floatval($datos['cantidad']);
+            $precioCompra = floatval($articulo->precioCompra ?? 0);
+            
+            // FÓRMULA REAL IDENTIFICADA: SICAR usa 25% de margen fijo
+            $precioCon = $precioCompra * 1.25;
+            $importeCompra = $cantidad * $precioCompra;
+            $importeCon = $cantidad * $precioCon;
+            $diferencia = $importeCon - $importeCompra;
+            $utilidad = 25.000000;  // Utilidad fija 25% como en BD real
+
+            // 6. OBTENER PRÓXIMO ORDEN
+            $maxOrden = DB::table('detallecot')
+                ->where('cot_id', $datos['cot_id'])
+                ->max('orden') ?? 0;
+            $orden = $maxOrden + 1;
+
+            // 7. CREAR DETALLE EXACTAMENTE COMO SICAR (30 CAMPOS)
+            $detalle = [
+                'cot_id' => $datos['cot_id'],
+                'art_id' => $datos['art_id'],
+                'clave' => $articulo->clave,
+                'descripcion' => $articulo->descripcion,
+                'cantidad' => number_format($cantidad, 3, '.', ''),
+                'unidad' => $articulo->unidadVenta ?? 'PZA',
+                'precioCompra' => number_format($precioCompra, 2, '.', ''),
+                'precioNorSin' => null,                                    // NULL según BD real
+                'precioNorCon' => null,                                    // NULL según BD real
+                'precioSin' => null,                                       // NULL según BD real
+                'precioCon' => number_format($precioCon, 2, '.', ''),
+                'importeCompra' => number_format($importeCompra, 2, '.', ''),
+                'importeNorSin' => null,                                   // NULL según BD real
+                'importeNorCon' => null,                                   // NULL según BD real
+                'importeSin' => null,                                      // NULL según BD real
+                'importeCon' => number_format($importeCon, 2, '.', ''),
+                'monPrecioNorSin' => null,                                 // Campos de moneda null
+                'monPrecioNorCon' => null,
+                'monPrecioSin' => null,
+                'monPrecioCon' => null,
+                'monImporteNorSin' => null,
+                'monImporteNorCon' => null,
+                'monImporteSin' => null,
+                'monImporteCon' => null,
+                'diferencia' => number_format($diferencia, 2, '.', ''),
+                'utilidad' => number_format($utilidad, 6, '.', ''),
+                'descPorcentaje' => '0.00',                                // Default NOT NULL
+                'descTotal' => '0.00',                                     // Default NOT NULL
+                'caracteristicas' => null,
+                'orden' => $orden
+            ];
+
+            // 8. INSERTAR DETALLE
+            DB::table('detallecot')->insert($detalle);
+
+            // 9. ACTUALIZAR TOTALES DE COTIZACIÓN (como lo hace SICAR)
+            $this->actualizarTotalesCotizacion($datos['cot_id']);
+
+            DB::commit();
+
+            Log::info('TUNNEL: Artículo agregado a cotización siguiendo flujo SICAR', [
+                'cot_id' => $datos['cot_id'],
+                'art_id' => $datos['art_id'],
+                'clave' => $articulo->clave,
+                'cantidad' => $cantidad,
+                'precio' => $precioCon,
+                'importe' => $importeCon,
+                'orden' => $orden
+            ]);
+
+            return response()->json([
+                'success' => true,
+                'mensaje' => 'Artículo agregado correctamente siguiendo flujo SICAR',
+                'detalle' => [
+                    'cot_id' => $datos['cot_id'],
+                    'art_id' => $datos['art_id'],
+                    'clave' => $articulo->clave,
+                    'descripcion' => $articulo->descripcion,
+                    'cantidad' => $cantidad,
+                    'precio' => $precioCon,
+                    'importe' => $importeCon,
+                    'utilidad' => $utilidad,
+                    'orden' => $orden
+                ]
+            ]);
+
+        } catch (\Exception $e) {
+            DB::rollBack();
+            
+            Log::error('TUNNEL: Error al agregar artículo a cotización', [
+                'error' => $e->getMessage(),
+                'cot_id' => $request->input('cot_id', 'N/A'),
+                'art_id' => $request->input('art_id', 'N/A')
+            ]);
+
+            return response()->json([
+                'success' => false,
+                'error' => $e->getMessage()
+            ], 400);
+        }
+    }
+
+
+    /**
+     * Actualizar totales de cotización (como lo hace SICAR)
+     */
+    private function actualizarTotalesCotizacion($cotizacionId)
+    {
+        // Calcular totales desde los detalles (como lo hace SICAR)
+        $totales = DB::table('detallecot')
+            ->where('cot_id', $cotizacionId)
+            ->selectRaw('
+                SUM(importeCon) as subtotal,
+                SUM(importeCon) as total
+            ')
+            ->first();
+
+        // Actualizar cotización
+        DB::table('cotizacion')
+            ->where('cot_id', $cotizacionId)
+            ->update([
+                'subtotal' => number_format($totales->subtotal ?? 0, 2, '.', ''),
+                'total' => number_format($totales->total ?? 0, 2, '.', '')
+            ]);
+        
+        Log::info('TUNNEL: Totales de cotización actualizados', [
+            'cot_id' => $cotizacionId,
+            'subtotal' => $totales->subtotal ?? 0,
+            'total' => $totales->total ?? 0
         ]);
     }
 }
