@@ -367,8 +367,8 @@ class CotizacionController extends Controller
                 'monImporteCon' => null,
                 'diferencia' => number_format($diferencia, 2, '.', ''),
                 'utilidad' => number_format($utilidad, 6, '.', ''),
-                'descPorcentaje' => null,  // ✅ CRÍTICO: null, no 0.00
-                'descTotal' => null,      // ✅ CRÍTICO: null, no 0.00
+                'descPorcentaje' => 0.00,  // BD requiere NOT NULL
+                'descTotal' => 0.00,      // BD requiere NOT NULL
                 'caracteristicas' => null,
                 'orden' => $orden + 1  // SICAR espera que empiece en 1, no en 0
             ];
