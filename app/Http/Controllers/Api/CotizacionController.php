@@ -9,6 +9,95 @@ use Illuminate\Support\Facades\Log;
 
 class CotizacionController extends Controller
 {
+    /**
+     * BACKUP DEL MÉTODO ORIGINAL - NO TOCAR
+     * Método original que funcionaba con CUSPI antes de la fusión
+     */
+    public function crearOriginal(Request $request)
+    {
+        try {
+            // 1. VALIDAR DATOS (menos opciones porque las obtendremos de SICAR)
+            $datos = $request->validate([
+                'cli_id' => 'required|integer',
+                'vnd_id' => 'nullable|integer',
+                'fecha' => 'required|date',
+                'header' => 'nullable|string',                      // Opcional - usar config si no viene
+                'footer' => 'nullable|string',                      // Opcional - usar config si no viene
+                'descuento' => 'nullable|numeric|min:0',
+                'articulos' => 'required|array|min:1',
+                'articulos.*.art_id' => 'required|integer',
+                'articulos.*.cantidad' => 'required|numeric|min:0.0001',
+                'articulos.*.precioCon' => 'required|numeric|min:0.000001',
+                'articulos.*.precioCompra' => 'nullable|numeric|min:0',
+                'opciones' => 'nullable|array',                    // Opcional - solo para casos específicos
+                'moneda' => 'nullable|array'
+            ]);
+
+            Log::info('TUNNEL: Creando cotización en SICAR (MÉTODO ORIGINAL)', [
+                'cli_id' => $datos['cli_id'],
+                'articulos_count' => count($datos['articulos'])
+            ]);
+
+            // 2. VALIDAR FOREIGN KEYS
+            $cliente = DB::table('cliente')->where('cli_id', $datos['cli_id'])->where('status', 1)->first();
+            if (!$cliente) {
+                throw new \Exception("Cliente ID {$datos['cli_id']} no existe o está inactivo");
+            }
+
+            foreach ($datos['articulos'] as $index => $articulo) {
+                $articuloDB = DB::table('articulo')->where('art_id', $articulo['art_id'])->where('status', 1)->first();
+                if (!$articuloDB) {
+                    throw new \Exception("Artículo ID {$articulo['art_id']} en posición {$index} no existe o está inactivo");
+                }
+            }
+
+            DB::beginTransaction();
+
+            // 3. CALCULAR TOTALES
+            $totales = $this->calcularTotales($datos['articulos'], $datos['descuento'] ?? 0);
+
+            // 4. INSERTAR COTIZACIÓN EN BD SICAR (tabla cotizacion) - MÉTODO ORIGINAL
+            $cotizacionId = $this->insertarCotizacionOriginal($datos, $totales);
+
+            // 5. INSERTAR DETALLES EN BD SICAR (tabla detallecot)
+            $this->insertarDetalles($cotizacionId, $datos['articulos']);
+
+            DB::commit();
+
+            Log::info('TUNNEL: Cotización creada exitosamente (MÉTODO ORIGINAL)', [
+                'cot_id' => $cotizacionId,
+                'total' => $totales['total']
+            ]);
+
+            // 6. RETORNAR RESPUESTA CON ESTRUCTURA REQUERIDA POR CUSPI
+            return response()->json([
+                'success' => true,
+                'mensaje' => 'Cotización creada correctamente en SICAR (método original)',
+                'cotizacion' => [
+                    'cot_id' => $cotizacionId,
+                    'total' => $totales['total'],
+                    'subtotal' => $totales['subtotal'],
+                    'fecha' => $datos['fecha'],
+                    'cliente' => $this->getClienteNombre($datos['cli_id']),
+                    'articulos_count' => count($datos['articulos'])
+                ]
+            ]);
+
+        } catch (\Exception $e) {
+            DB::rollBack();
+            
+            Log::error('TUNNEL: Error al crear cotización (MÉTODO ORIGINAL)', [
+                'error' => $e->getMessage(),
+                'cli_id' => $request->input('cli_id', 'N/A')
+            ]);
+
+            return response()->json([
+                'success' => false,
+                'error' => $e->getMessage()
+            ], 400);
+        }
+    }
+
     public function crear(Request $request)
     {
         try {
@@ -109,7 +198,10 @@ class CotizacionController extends Controller
         ];
     }
 
-    private function insertarCotizacion($datos, $totales)
+    /**
+     * BACKUP DEL MÉTODO ORIGINAL insertarCotizacion - NO TOCAR
+     */
+    private function insertarCotizacionOriginal($datos, $totales)
     {
         // VALIDAR USUARIO ANTES DE INSERTAR
         $usuario = DB::table('usuario')->where('usu_id', 1)->where('status', 1)->first();
@@ -161,6 +253,73 @@ class CotizacionController extends Controller
         ];
 
         return DB::table('cotizacion')->insertGetId($cotizacion);
+    }
+
+    private function insertarCotizacion($datos, $totales)
+    {
+        // FUSIÓN: USAR LÓGICA DEL MÉTODO QUE FUNCIONA (crearCotizacionComoSicar)
+        
+        // 1. OBTENER CONFIGURACIÓN DE VENTACONF (como lo hace SICAR exitosamente)
+        $config = $this->obtenerConfiguracionVentaConf();
+        
+        // 2. OBTENER MONEDA POR DEFECTO (con campos correctos)
+        $monedaDefault = $this->obtenerMonedaPorDefecto();
+        
+        // 3. OBTENER USUARIO (por ahora usamos ID 1)
+        $usuario = $this->obtenerUsuario();
+
+        // 4. USAR MONEDA DESDE REQUEST SI VIENE, SINO LA POR DEFECTO
+        $monedaFinal = [
+            'mon_id' => $datos['moneda']['mon_id'] ?? $monedaDefault['mon_id'],
+            'abreviacion' => $datos['moneda']['monAbr'] ?? $monedaDefault['abreviacion'],
+            'tipoCambio' => $datos['moneda']['monTipoCambio'] ?? $monedaDefault['tipoCambio']
+        ];
+
+        // 5. CREAR COTIZACIÓN CON CONSTRUCTOR COMPLETO (TODOS LOS 34 CAMPOS) - MÉTODO QUE FUNCIONA
+        $cotizacion = [
+            // NO incluir cot_id - es AUTO_INCREMENT
+            'fecha' => $datos['fecha'],                                 // Fecha desde CUSPI
+            'header' => $datos['header'] ?? $config['cotHeader'],       // Header desde CUSPI o config
+            'footer' => $datos['footer'] ?? $config['cotFooter'],       // Footer desde CUSPI o config
+            'subtotal' => $totales['subtotal'],                         // Calculado desde artículos
+            'descuento' => $totales['descuento'],                       // Desde CUSPI
+            'total' => $totales['total'],                               // Calculado
+            'monSubtotal' => null,                                      // null en cotizaciones normales
+            'monDescuento' => null,                                     // null en cotizaciones normales
+            'monTotal' => null,                                         // null en cotizaciones normales
+            'monAbr' => $monedaFinal['abreviacion'],                    // Desde moneda seleccionada
+            'monTipoCambio' => $monedaFinal['tipoCambio'],             // Desde moneda seleccionada
+            'peso' => null,                                             // null en cotizaciones normales
+            'status' => 1,                                              // 1 = activa
+            'img' => $config['cotMosImg'],                              // desde ventaconf
+            'caracteristicas' => $config['cotMosCar'],                  // desde ventaconf
+            'desglosado' => $config['cotDesglosar'],                    // desde ventaconf
+            'mosDescuento' => $config['cotDescuento'],                  // desde ventaconf
+            'mosPeso' => $config['cotPeso'],                            // desde ventaconf
+            'impuestos' => $datos['opciones']['impuestos'] ?? 0,        // Desde CUSPI o 0
+            'mosFirma' => $config['cotMosFirma'],                       // desde ventaconf
+            'leyendaImpuestos' => $config['cotLeyendaImpuestos'],       // desde ventaconf
+            'mosParidad' => $config['cotMosParidad'],                   // desde ventaconf
+            'bloqueada' => 0,                                           // 0 = no bloqueada al crear
+            'mosDetallePaq' => $config['cotMosDetallePaq'],             // desde ventaconf
+            'mosClaveArt' => $config['cotMosClaveArt'],                 // desde ventaconf
+            'folioMovil' => null,                                       // null (no se usa)
+            'serieMovil' => null,                                       // null (no se usa)
+            'totalSipa' => null,                                        // null (no hay SIPA al crear)
+            'mosPreAntDesc' => $config['cotMosPreAntDesc'],             // desde ventaconf
+            'usu_id' => $usuario['usu_id'],                             // ID del usuario
+            'cli_id' => $datos['cli_id'],                               // Cliente desde CUSPI
+            'mon_id' => $monedaFinal['mon_id'],                         // ID moneda seleccionada
+            'vnd_id' => $datos['vnd_id'] ?? $usuario['vnd_id']          // Vendedor desde CUSPI o usuario
+        ];
+
+        // 6. GUARDAR COTIZACIÓN EN BD (método que funciona)
+        $cotizacionId = DB::table('cotizacion')->insertGetId($cotizacion);
+        
+        // 7. CREAR HISTORIAL (como lo hace el método exitoso)
+        $this->crearHistorial($cotizacionId, $usuario);
+        
+        return $cotizacionId;
     }
 
     private function insertarDetalles($cotizacionId, $articulos)
