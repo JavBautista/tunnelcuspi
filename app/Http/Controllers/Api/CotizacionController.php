@@ -251,4 +251,237 @@ class CotizacionController extends Controller
         $cliente = DB::table('cliente')->where('cli_id', $cliId)->first();
         return $cliente ? $cliente->nombre : 'Cliente desconocido';
     }
+
+    /**
+     * NUEVO: Crear cotización siguiendo EXACTAMENTE el flujo de SICAR
+     * Basado en /home/dev/Proyectos/dev_sicar/FLUJO_EXACTO_NUEVA_COTIZACION.md
+     */
+    public function crearCotizacionComoSicar()
+    {
+        try {
+            Log::info('TUNNEL: Iniciando creación de cotización usando flujo exacto de SICAR');
+
+            DB::beginTransaction();
+
+            // 1. OBTENER CONFIGURACIÓN DE VENTACONF (como lo hace SICAR)
+            $config = $this->obtenerConfiguracionVentaConf();
+            
+            // 2. OBTENER MONEDA POR DEFECTO
+            $monedaDefault = $this->obtenerMonedaPorDefecto();
+            
+            // 3. OBTENER CLIENTE POR DEFECTO ("PÚBLICO EN GENERAL")
+            $clienteDefault = $this->obtenerClientePorDefecto();
+            
+            // 4. OBTENER USUARIO (por ahora usamos ID 1)
+            $usuario = $this->obtenerUsuario();
+
+            // 5. CREAR COTIZACIÓN CON CONSTRUCTOR COMPLETO (TODOS LOS 34 CAMPOS)
+            $cotizacion = [
+                // NO incluir cot_id - es AUTO_INCREMENT
+                'fecha' => date('Y-m-d'),                           // new Date()
+                'header' => $config['cotHeader'],                   // desde ventaconf
+                'footer' => $config['cotFooter'],                   // desde ventaconf
+                'subtotal' => '0.00',                               // BigDecimal.ZERO
+                'descuento' => null,                                // null en cotizaciones nuevas
+                'total' => '0.00',                                  // BigDecimal.ZERO
+                'monSubtotal' => null,                              // null en cotizaciones nuevas
+                'monDescuento' => null,                             // null en cotizaciones nuevas
+                'monTotal' => null,                                 // null en cotizaciones nuevas
+                'monAbr' => $monedaDefault['abreviacion'],          // "MXN"
+                'monTipoCambio' => $monedaDefault['tipoCambio'],    // 1.000000
+                'peso' => null,                                     // null en cotizaciones nuevas
+                'status' => 1,                                      // 1 = activa
+                'img' => $config['cotMosImg'],                      // desde ventaconf
+                'caracteristicas' => $config['cotMosCar'],          // desde ventaconf
+                'desglosado' => $config['cotDesglosar'],            // desde ventaconf
+                'mosDescuento' => $config['cotDescuento'],          // desde ventaconf
+                'mosPeso' => $config['cotPeso'],                    // desde ventaconf
+                'impuestos' => 0,                                   // 0 por defecto en nuevas
+                'mosFirma' => $config['cotMosFirma'],               // desde ventaconf
+                'leyendaImpuestos' => $config['cotLeyendaImpuestos'], // desde ventaconf
+                'mosParidad' => $config['cotMosParidad'],           // desde ventaconf
+                'bloqueada' => 0,                                   // 0 = no bloqueada al crear
+                'mosDetallePaq' => $config['cotMosDetallePaq'],     // desde ventaconf
+                'mosClaveArt' => $config['cotMosClaveArt'],         // desde ventaconf
+                'folioMovil' => null,                               // null (no se usa)
+                'serieMovil' => null,                               // null (no se usa)
+                'totalSipa' => null,                                // null (no hay SIPA al crear)
+                'mosPreAntDesc' => $config['cotMosPreAntDesc'],     // desde ventaconf
+                'usu_id' => $usuario['usu_id'],                     // ID del usuario
+                'cli_id' => $clienteDefault['cli_id'],              // ID cliente por defecto
+                'mon_id' => $monedaDefault['mon_id'],               // ID moneda por defecto
+                'vnd_id' => $usuario['vnd_id']                      // ID vendedor del usuario (puede ser null)
+            ];
+
+            // 6. GUARDAR COTIZACIÓN EN BD (EntityManager persist equivalente)
+            $cotizacionId = DB::table('cotizacion')->insertGetId($cotizacion);
+
+            // 7. CREAR HISTORIAL (como lo hace SICAR)
+            $this->crearHistorial($cotizacionId, $usuario);
+
+            DB::commit();
+
+            Log::info('TUNNEL: Cotización creada siguiendo flujo exacto de SICAR', [
+                'cot_id' => $cotizacionId,
+                'flujo' => 'SICAR_EXACTO',
+                'config_origen' => 'ventaconf'
+            ]);
+
+            // 8. RETORNAR RESPUESTA
+            return response()->json([
+                'success' => true,
+                'mensaje' => 'Cotización creada siguiendo flujo exacto de SICAR',
+                'cotizacion' => [
+                    'cot_id' => $cotizacionId,
+                    'fecha' => date('Y-m-d'),
+                    'cliente' => $clienteDefault['nombre'],
+                    'total' => '0.00',
+                    'subtotal' => '0.00',
+                    'moneda' => $monedaDefault['abreviacion'],
+                    'flujo' => 'SICAR_EXACTO'
+                ]
+            ]);
+
+        } catch (\Exception $e) {
+            DB::rollBack();
+            
+            Log::error('TUNNEL: Error al crear cotización con flujo SICAR', [
+                'error' => $e->getMessage(),
+                'flujo' => 'SICAR_EXACTO'
+            ]);
+
+            return response()->json([
+                'success' => false,
+                'error' => $e->getMessage(),
+                'flujo' => 'SICAR_EXACTO'
+            ], 400);
+        }
+    }
+
+    /**
+     * Obtener configuración completa de ventaconf (como lo hace SICAR)
+     */
+    private function obtenerConfiguracionVentaConf()
+    {
+        $config = DB::table('ventaconf')->first();
+        
+        if (!$config) {
+            throw new \Exception("No se encontró configuración en tabla ventaconf");
+        }
+        
+        return [
+            'cotHeader' => $config->cotHeader ?? '',
+            'cotFooter' => $config->cotFooter ?? '',
+            'cotMosImg' => $config->cotMosImg ?? 0,
+            'cotMosCar' => $config->cotMosCar ?? 0,
+            'cotDesglosar' => $config->cotDesglosar ?? 0,
+            'cotDescuento' => $config->cotDescuento ?? 0,
+            'cotPeso' => $config->cotPeso ?? 0,
+            'cotMosFirma' => $config->cotMosFirma ?? 0,
+            'cotLeyendaImpuestos' => $config->cotLeyendaImpuestos ?? '',
+            'cotMosParidad' => $config->cotMosParidad ?? 0,
+            'cotBloquear' => $config->cotBloquear ?? 0,
+            'cotMosDetallePaq' => $config->cotMosDetallePaq ?? 0,
+            'cotMosClaveArt' => $config->cotMosClaveArt ?? 0,
+            'cotMosPreAntDesc' => $config->cotMosPreAntDesc ?? 0
+        ];
+    }
+
+    /**
+     * Obtener moneda por defecto (como lo hace SICAR)
+     */
+    private function obtenerMonedaPorDefecto()
+    {
+        // Buscar moneda nacional (mn = 1) que sería la por defecto
+        $moneda = DB::table('moneda')->where('status', 1)->where('mn', 1)->first();
+        
+        if (!$moneda) {
+            // Si no hay moneda nacional, usar la primera activa
+            $moneda = DB::table('moneda')->where('status', 1)->first();
+        }
+        
+        if (!$moneda) {
+            throw new \Exception("No se encontró moneda por defecto activa");
+        }
+        
+        return [
+            'mon_id' => $moneda->mon_id,
+            'abreviacion' => $moneda->abr ?? 'MXN',  // Campo se llama 'abr' no 'abreviacion'
+            'tipoCambio' => $moneda->tipoCambio ?? 1.000000
+        ];
+    }
+
+    /**
+     * Obtener cliente por defecto "PÚBLICO EN GENERAL" (como lo hace SICAR)
+     */
+    private function obtenerClientePorDefecto()
+    {
+        // Buscar cliente "PÚBLICO EN GENERAL" o similar
+        $cliente = DB::table('cliente')
+            ->where('status', 1)
+            ->where(function($query) {
+                $query->whereRaw('UPPER(nombre) LIKE ?', ['%PÚBLICO%'])
+                      ->orWhereRaw('UPPER(nombre) LIKE ?', ['%PUBLICO%'])
+                      ->orWhereRaw('UPPER(nombre) LIKE ?', ['%GENERAL%']);
+            })
+            ->first();
+            
+        if (!$cliente) {
+            // Si no existe, usar el primer cliente activo
+            $cliente = DB::table('cliente')->where('status', 1)->first();
+        }
+        
+        if (!$cliente) {
+            throw new \Exception("No se encontró cliente por defecto activo");
+        }
+        
+        return [
+            'cli_id' => $cliente->cli_id,
+            'nombre' => $cliente->nombre
+        ];
+    }
+
+    /**
+     * Obtener usuario actual (por ahora hardcodeado a ID 1)
+     */
+    private function obtenerUsuario()
+    {
+        $usuario = DB::table('usuario')->where('usu_id', 1)->where('status', 1)->first();
+        
+        if (!$usuario) {
+            throw new \Exception("Usuario ID 1 no existe o está inactivo");
+        }
+        
+        // Obtener vendedor del usuario si existe
+        $vendedor = null;
+        if ($usuario->vnd_id) {
+            $vendedor = DB::table('vendedor')->where('vnd_id', $usuario->vnd_id)->where('status', 1)->first();
+        }
+        
+        return [
+            'usu_id' => $usuario->usu_id,
+            'vnd_id' => $vendedor ? $vendedor->vnd_id : null
+        ];
+    }
+
+    /**
+     * Crear historial (como lo hace SICAR)
+     */
+    private function crearHistorial($cotizacionId, $usuario)
+    {
+        $historial = [
+            'movimiento' => 1,                                 // Tipo de movimiento (1 = creación)
+            'fecha' => date('Y-m-d H:i:s'),                    // new Date()
+            'tabla' => 'cotizacion',                           // Nombre de la tabla
+            'id' => $cotizacionId,                             // ID del registro
+            'usu_id' => $usuario['usu_id']                     // ID del usuario
+        ];
+        
+        DB::table('historial')->insert($historial);
+        
+        Log::info('TUNNEL: Historial creado para cotización', [
+            'cot_id' => $cotizacionId,
+            'movimiento' => 'creación'
+        ]);
+    }
 }
