@@ -11,11 +11,6 @@ class ValidateApiKey
     {
         $apiKey = $request->header('API-KEY');
 
-        // Si el header viene escapado (especialmente en POST), des-escaparlo
-        if ($apiKey) {
-            $apiKey = stripslashes($apiKey);
-        }
-
         if (!$apiKey || $apiKey !== config('apikey.key')) {
             return response()->json([
                 'ok' => false,
