@@ -475,6 +475,10 @@ class CotizacionController extends Controller
             // 7. CREAR HISTORIAL (como lo hace SICAR)
             $this->crearHistorial($cotizacionId, $usuario);
 
+            // 8. AGREGAR ARTÍCULO DE PRUEBA (art_id=1634, clave='4-1025617')
+            // SOLO PARA PROBAR QUE NO ROMPE EL SOFTWARE SICAR
+            $this->agregarArticuloDePrueba($cotizacionId, $clienteDefault, 1634, 1.000);
+
             DB::commit();
 
             Log::info('TUNNEL: Cotización creada siguiendo flujo exacto de SICAR', [
@@ -922,5 +926,109 @@ class CotizacionController extends Controller
             'subtotal' => $totales->subtotal ?? 0,
             'total' => $totales->total ?? 0
         ]);
+    }
+
+    /**
+     * Agregar artículo de prueba siguiendo flujo exacto de SICAR
+     * SOLO PARA PROBAR QUE NO ROMPE EL SOFTWARE
+     */
+    private function agregarArticuloDePrueba($cotizacionId, $cliente, $artId, $cantidad)
+    {
+        try {
+            // 1. OBTENER ARTÍCULO DE BD
+            $articulo = DB::table('articulo')->where('art_id', $artId)->where('status', 1)->first();
+            
+            if (!$articulo) {
+                throw new \Exception("Artículo ID {$artId} no existe o está inactivo");
+            }
+
+            // 2. CALCULAR PRECIOS SEGÚN CLIENTE (como lo hace ArticuloAuxiliar)
+            $precioCompra = floatval($articulo->precioCompra);
+            $precioCon = $this->obtenerPrecioSegunCliente($articulo, $cliente['precio'] ?? 1);
+            
+            // 3. CALCULAR IMPORTES (EXACTAMENTE COMO SICAR)
+            $cantidad = floatval($cantidad);
+            $importeCompra = $cantidad * $precioCompra;
+            $importeCon = $cantidad * $precioCon;
+            $diferencia = $importeCon - $importeCompra;
+            $utilidad = $importeCompra > 0 ? (($diferencia / $importeCompra) * 100) : 0;
+
+            // 4. CREAR DETALLE EXACTAMENTE COMO SICAR (30 CAMPOS)
+            $detalle = [
+                'cot_id' => $cotizacionId,
+                'art_id' => $artId,
+                'clave' => $articulo->clave,
+                'descripcion' => $articulo->descripcion,
+                'cantidad' => number_format($cantidad, 3, '.', ''),
+                'unidad' => $articulo->unidadVenta ?? 'PZA',
+                'precioCompra' => number_format($precioCompra, 2, '.', ''),
+                'precioNorSin' => null,                                    // NULL según BD real
+                'precioNorCon' => null,                                    // NULL según BD real
+                'precioSin' => null,                                       // NULL según BD real
+                'precioCon' => number_format($precioCon, 2, '.', ''),
+                'importeCompra' => number_format($importeCompra, 2, '.', ''),
+                'importeNorSin' => null,                                   // NULL según BD real
+                'importeNorCon' => null,                                   // NULL según BD real
+                'importeSin' => null,                                      // NULL según BD real
+                'importeCon' => number_format($importeCon, 2, '.', ''),
+                'monPrecioNorSin' => null,                                 // Campos de moneda null
+                'monPrecioNorCon' => null,
+                'monPrecioSin' => null,
+                'monPrecioCon' => null,
+                'monImporteNorSin' => null,
+                'monImporteNorCon' => null,
+                'monImporteSin' => null,
+                'monImporteCon' => null,
+                'diferencia' => number_format($diferencia, 2, '.', ''),
+                'utilidad' => number_format($utilidad, 6, '.', ''),
+                'descPorcentaje' => '0.00',                                // Default NOT NULL
+                'descTotal' => '0.00',                                     // Default NOT NULL
+                'caracteristicas' => null,
+                'orden' => 1                                               // Primer artículo
+            ];
+
+            // 5. INSERTAR DETALLE
+            DB::table('detallecot')->insert($detalle);
+
+            // 6. ACTUALIZAR TOTALES DE COTIZACIÓN (como lo hace SICAR)
+            $this->actualizarTotalesCotizacion($cotizacionId);
+
+            Log::info('TUNNEL: Artículo de prueba agregado siguiendo flujo SICAR', [
+                'cot_id' => $cotizacionId,
+                'art_id' => $artId,
+                'clave' => $articulo->clave,
+                'cantidad' => $cantidad,
+                'precio' => $precioCon,
+                'importe' => $importeCon,
+                'utilidad' => $utilidad
+            ]);
+
+        } catch (\Exception $e) {
+            Log::error('TUNNEL: Error al agregar artículo de prueba', [
+                'error' => $e->getMessage(),
+                'cot_id' => $cotizacionId,
+                'art_id' => $artId
+            ]);
+            throw $e;
+        }
+    }
+
+    /**
+     * Obtener precio según tipo de cliente (como lo hace ArticuloAuxiliar)
+     */
+    private function obtenerPrecioSegunCliente($articulo, $tipoPrecioCliente)
+    {
+        switch ($tipoPrecioCliente) {
+            case 1:
+                return floatval($articulo->precio1);
+            case 2:
+                return floatval($articulo->precio2);
+            case 3:
+                return floatval($articulo->precio3);
+            case 4:
+                return floatval($articulo->precio4);
+            default:
+                return floatval($articulo->precio1);  // Default al precio 1
+        }
     }
 }
