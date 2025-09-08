@@ -25,6 +25,7 @@ Route::middleware('validate.apikey')->group(function() {
     
     Route::post('/cotizaciones/crear', [CotizacionController::class, 'crear']);
     
+    //probando crear cotizacion como sicar
     Route::post('/cotizaciones/crear-sicar', [CotizacionController::class, 'crearCotizacionComoSicar']);
     
     Route::post('/cotizaciones/crear-sicar-vacio', [CotizacionController::class, 'crearCotizacionVacia']);
