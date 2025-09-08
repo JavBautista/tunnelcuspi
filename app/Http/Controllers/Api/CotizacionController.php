@@ -475,10 +475,6 @@ class CotizacionController extends Controller
             // 7. CREAR HISTORIAL (como lo hace SICAR)
             $this->crearHistorial($cotizacionId, $usuario);
 
-            // 8. AGREGAR ARTÍCULO DE PRUEBA (art_id=1634, clave='4-1025617')
-            // SOLO PARA PROBAR QUE NO ROMPE EL SOFTWARE SICAR
-            $this->agregarArticuloDePrueba($cotizacionId, $clienteDefault, 1634, 1.000);
-
             DB::commit();
 
             Log::info('TUNNEL: Cotización creada siguiendo flujo exacto de SICAR', [
@@ -516,6 +512,92 @@ class CotizacionController extends Controller
                 'flujo' => 'SICAR_EXACTO'
             ], 400);
         }
+    }
+
+    /**
+     * MÉTODO DE PRUEBA: Crea cotización + agrega artículo siguiendo flujo exacto SICAR
+     * Basado en análisis exhaustivo del módulo secotizacion-4.0.jar
+     */
+    public function crearCotizacionConArticuloPrueba()
+    {
+        try {
+            Log::info('TUNNEL: Iniciando creación de cotización + artículo siguiendo flujo exacto SICAR');
+
+            DB::beginTransaction();
+
+            // PASO 1: CREAR COTIZACIÓN VACÍA (usar método existente)
+            $responseCotizacion = $this->crearCotizacionComoSicar();
+            $dataCotizacion = json_decode($responseCotizacion->getContent(), true);
+            
+            if (!$dataCotizacion['success']) {
+                throw new \Exception('Error al crear cotización base');
+            }
+
+            $cotizacionId = $dataCotizacion['cotizacion']['cot_id'];
+
+            // PASO 2: AGREGAR ARTÍCULO DE PRUEBA
+            $articuloId = 1634; // "4-1025617" - Papelera Basurero Elite 121 Lts Rojo
+            $cantidad = 1.000;
+
+            $resultado = $this->agregarArticuloInterno($cotizacionId, $articuloId, $cantidad);
+
+            DB::commit();
+
+            Log::info('TUNNEL: Cotización + Artículo creados exitosamente', [
+                'cot_id' => $cotizacionId,
+                'art_id' => $articuloId,
+                'cantidad' => $cantidad,
+                'flujo' => 'SICAR_EXACTO'
+            ]);
+
+            return response()->json([
+                'success' => true,
+                'mensaje' => 'Cotización creada y artículo agregado siguiendo flujo exacto SICAR',
+                'datos' => [
+                    'cotizacion' => $dataCotizacion['cotizacion'],
+                    'articulo_agregado' => $resultado
+                ]
+            ]);
+
+        } catch (\Exception $e) {
+            DB::rollBack();
+            
+            Log::error('TUNNEL: Error al crear cotización + artículo', [
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString()
+            ]);
+
+            return response()->json([
+                'success' => false,
+                'error' => 'Error al crear cotización + artículo: ' . $e->getMessage()
+            ], 500);
+        }
+    }
+
+    /**
+     * Método auxiliar interno para agregar artículo (usado por métodos de prueba)
+     */
+    private function agregarArticuloInterno($cotizacionId, $articuloId, $cantidad = 1.000)
+    {
+        // Simular Request para reutilizar el método público existente
+        $requestData = [
+            'cot_id' => $cotizacionId,
+            'art_id' => $articuloId,
+            'cantidad' => $cantidad
+        ];
+        
+        $request = new \Illuminate\Http\Request();
+        $request->merge($requestData);
+        
+        // Llamar al método público existente pero capturar solo los datos
+        $response = $this->agregarArticuloACotizacion($request);
+        $responseData = json_decode($response->getContent(), true);
+        
+        if (!$responseData['success']) {
+            throw new \Exception($responseData['error'] ?? 'Error al agregar artículo');
+        }
+        
+        return $responseData['detalle'];
     }
 
     /**
@@ -797,16 +879,44 @@ class CotizacionController extends Controller
                 throw new \Exception("El artículo ya está en la cotización");
             }
 
-            // 5. CALCULAR IMPORTES CON FÓRMULA REAL DE SICAR
+            // 5. CALCULAR IMPORTES SIGUIENDO ANÁLISIS EXHAUSTIVO DE SICAR
             $cantidad = floatval($datos['cantidad']);
-            $precioCompra = floatval($articulo->precioCompra ?? 0);
             
-            // FÓRMULA REAL IDENTIFICADA: SICAR usa 25% de margen fijo
-            $precioCon = $precioCompra * 1.25;
-            $importeCompra = $cantidad * $precioCompra;
-            $importeCon = $cantidad * $precioCon;
+            // OBTENER DATOS PARA CÁLCULOS (siguiendo análisis SICAR)
+            $ventaConf = DB::table('ventaconf')->first();
+            $cliente = DB::table('cliente')->where('cli_id', $cotizacion->cli_id)->first();
+            
+            // CÁLCULO 1: Precio de Compra (CotizacionLogic.crearDetalle línea 749)
+            $precioCompraProm = $articulo->preCompraProm / ($articulo->factor ?: 1);
+            $precioCompraFinal = $this->calcularPrecioConImpuestosSimple($precioCompraProm, $articulo);
+            
+            // CÁLCULO 2: Selección de Precio según Cliente (análisis líneas 142-185)
+            $precioCon = null;
+            $precioSin = null;
+            
+            if ($ventaConf->numPreCli ?? false) {
+                // Usar precio según nivel del cliente
+                $nivelPrecio = $cliente->precio ?? 1;
+                switch ($nivelPrecio) {
+                    case 1: $precioCon = $articulo->precio1; break;
+                    case 2: $precioCon = $articulo->precio2; break;
+                    case 3: $precioCon = $articulo->precio3; break;
+                    case 4: $precioCon = $articulo->precio4; break;
+                    default: $precioCon = $articulo->precio1; break;
+                }
+            } else {
+                // Usar precio 1 general
+                $precioCon = $articulo->precio1;
+            }
+            
+            $precioSin = $this->calcularPrecioSinImpuestosSimple($precioCon, $articulo);
+            
+            // CÁLCULO 3: Importes
+            $importeCompra = $precioCompraFinal * $cantidad;
+            $importeSin = $precioSin * $cantidad;
+            $importeCon = $precioCon * $cantidad;
             $diferencia = $importeCon - $importeCompra;
-            $utilidad = 25.000000;  // Utilidad fija 25% como en BD real
+            $utilidad = $diferencia > 0 ? (($diferencia / $importeCompra) * 100) : 0;
 
             // 6. OBTENER PRÓXIMO ORDEN
             $maxOrden = DB::table('detallecot')
@@ -814,7 +924,7 @@ class CotizacionController extends Controller
                 ->max('orden') ?? 0;
             $orden = $maxOrden + 1;
 
-            // 7. CREAR DETALLE EXACTAMENTE COMO SICAR (30 CAMPOS)
+            // 7. CREAR DETALLE SIGUIENDO ANÁLISIS EXHAUSTIVO (30 CAMPOS EXACTOS)
             $detalle = [
                 'cot_id' => $datos['cot_id'],
                 'art_id' => $datos['art_id'],
@@ -822,17 +932,17 @@ class CotizacionController extends Controller
                 'descripcion' => $articulo->descripcion,
                 'cantidad' => number_format($cantidad, 3, '.', ''),
                 'unidad' => $articulo->unidadVenta ?? 'PZA',
-                'precioCompra' => number_format($precioCompra, 2, '.', ''),
-                'precioNorSin' => null,                                    // NULL según BD real
-                'precioNorCon' => null,                                    // NULL según BD real
-                'precioSin' => null,                                       // NULL según BD real
-                'precioCon' => number_format($precioCon, 2, '.', ''),
+                'precioCompra' => number_format($precioCompraFinal, 2, '.', ''),
+                'precioNorSin' => number_format($precioSin, 2, '.', ''),    // Precio normal sin impuestos
+                'precioNorCon' => number_format($precioCon, 2, '.', ''),    // Precio normal con impuestos
+                'precioSin' => number_format($precioSin, 2, '.', ''),       // Precio usado sin impuestos
+                'precioCon' => number_format($precioCon, 2, '.', ''),       // Precio usado con impuestos
                 'importeCompra' => number_format($importeCompra, 2, '.', ''),
-                'importeNorSin' => null,                                   // NULL según BD real
-                'importeNorCon' => null,                                   // NULL según BD real
-                'importeSin' => null,                                      // NULL según BD real
-                'importeCon' => number_format($importeCon, 2, '.', ''),
-                'monPrecioNorSin' => null,                                 // Campos de moneda null
+                'importeNorSin' => number_format($importeSin, 2, '.', ''),  // Importe normal sin impuestos
+                'importeNorCon' => number_format($importeCon, 2, '.', ''),  // Importe normal con impuestos
+                'importeSin' => number_format($importeSin, 2, '.', ''),     // Importe sin impuestos
+                'importeCon' => number_format($importeCon, 2, '.', ''),     // Importe con impuestos
+                'monPrecioNorSin' => null,                                 // Campos de moneda null por defecto
                 'monPrecioNorCon' => null,
                 'monPrecioSin' => null,
                 'monPrecioCon' => null,
@@ -840,11 +950,11 @@ class CotizacionController extends Controller
                 'monImporteNorCon' => null,
                 'monImporteSin' => null,
                 'monImporteCon' => null,
-                'diferencia' => number_format($diferencia, 2, '.', ''),
-                'utilidad' => number_format($utilidad, 6, '.', ''),
+                'diferencia' => number_format($diferencia, 2, '.', ''),    // Diferencia calculada
+                'utilidad' => number_format($utilidad, 6, '.', ''),        // Utilidad calculada
                 'descPorcentaje' => '0.00',                                // Default NOT NULL
                 'descTotal' => '0.00',                                     // Default NOT NULL
-                'caracteristicas' => null,
+                'caracteristicas' => $articulo->caracteristicas,          // Características del artículo
                 'orden' => $orden
             ];
 
@@ -1030,5 +1140,57 @@ class CotizacionController extends Controller
             default:
                 return floatval($articulo->precio1);  // Default al precio 1
         }
+    }
+
+    /**
+     * Calcula precio CON impuestos - Versión simplificada basada en análisis SICAR
+     */
+    private function calcularPrecioConImpuestosSimple($precioBase, $articulo)
+    {
+        // IEPS si aplica
+        if ($articulo->iepsActivo && $articulo->cuotaIeps > 0) {
+            $precioBase += $articulo->cuotaIeps;
+        }
+
+        // Obtener impuestos del artículo
+        $impuestos = DB::table('articuloimpuesto')
+            ->join('impuesto', 'articuloimpuesto.imp_id', '=', 'impuesto.imp_id')
+            ->where('articuloimpuesto.art_id', $articulo->art_id)
+            ->where('impuesto.status', 1)
+            ->get();
+
+        $precioConImpuestos = $precioBase;
+        
+        foreach ($impuestos as $impuesto) {
+            if ($impuesto->aplicacion == 1) { // Porcentaje
+                $precioConImpuestos += ($precioBase * $impuesto->porcentaje / 100);
+            } else { // Cantidad fija
+                $precioConImpuestos += $impuesto->porcentaje;
+            }
+        }
+
+        return $precioConImpuestos;
+    }
+
+    /**
+     * Calcula precio SIN impuestos - Versión simplificada
+     */
+    private function calcularPrecioSinImpuestosSimple($precioConImpuestos, $articulo)
+    {
+        $impuestos = DB::table('articuloimpuesto')
+            ->join('impuesto', 'articuloimpuesto.imp_id', '=', 'impuesto.imp_id')
+            ->where('articuloimpuesto.art_id', $articulo->art_id)
+            ->where('impuesto.status', 1)
+            ->get();
+
+        $factorImpuestos = 1;
+        
+        foreach ($impuestos as $impuesto) {
+            if ($impuesto->aplicacion == 1) { // Porcentaje
+                $factorImpuestos += ($impuesto->porcentaje / 100);
+            }
+        }
+
+        return $factorImpuestos > 1 ? ($precioConImpuestos / $factorImpuestos) : $precioConImpuestos;
     }
 }

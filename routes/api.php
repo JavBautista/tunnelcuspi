@@ -31,6 +31,9 @@ Route::middleware('validate.apikey')->group(function() {
     //Nueva ruta para crear cotizacion vacia (sin articulos)
     Route::post('/cotizaciones/crear-sicar-vacio', [CotizacionController::class, 'crearCotizacionVacia']);
     
+    //NUEVA RUTA: Crear cotización + agregar artículo de prueba (siguiendo flujo exacto SICAR)
+    Route::post('/cotizaciones/prueba-con-articulo', [CotizacionController::class, 'crearCotizacionConArticuloPrueba']);
+    
     Route::post('/cotizaciones/agregar-articulo', [CotizacionController::class, 'agregarArticuloACotizacion']);
     
     Route::post('/articulo/asignar-proveedor', [ArticuloController::class, 'asignarProveedor']);
