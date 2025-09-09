@@ -38,6 +38,11 @@ Route::middleware('validate.apikey')->group(function() {
     // Estado: ✅ FUNCIONANDO - Basado en análisis decompilado SICAR
     Route::post('/cotizaciones/agregar-articulo', [CotizacionController::class, 'agregarArticuloACotizacion']);
     
+    // ✅ NUEVA RUTA PARA COMPATIBILIDAD CON CUSPI
+    // Recibe estructura completa que CUSPI ya está enviando: {cotizacion: {}, detalles: [], impuestos: []}
+    // Estado: ✅ IMPLEMENTADO - Compatible con estructura existente de CUSPI
+    Route::post('/cotizaciones/crear', [CotizacionController::class, 'crearCotizacionDesdeCuspi']);
+    
 
 
     Route::post('/articulo/asignar-proveedor', [ArticuloController::class, 'asignarProveedor']);
