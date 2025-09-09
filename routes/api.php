@@ -23,19 +23,23 @@ Route::middleware('validate.apikey')->group(function() {
 
     Route::post('/existencia', [TunnelController::class, 'existencia']);
     
-    Route::post('/cotizaciones/crear', [CotizacionController::class, 'crear']);
+
+    // ✅ RUTAS DE COTIZACIÓN - SOLO MÉTODOS QUE FUNCIONAN
     
-    //probando crear cotizacion como sicar
-    Route::post('/cotizaciones/crear-sicar', [CotizacionController::class, 'crearCotizacionComoSicar']);
+    // ✅ Crear cotización vacía siguiendo flujo exacto SICAR 
+    // Estado: ✅ FUNCIONANDO - SICAR puede abrir sin problemas
+    Route::post('/cotizaciones/crear-vacia', [CotizacionController::class, 'crearCotizacionVacia']);
     
-    //Nueva ruta para crear cotizacion vacia (sin articulos)
-    Route::post('/cotizaciones/crear-sicar-vacio', [CotizacionController::class, 'crearCotizacionVacia']);
+    // ✅ Crear cotización + agregar artículo de prueba siguiendo flujo exacto SICAR  
+    // Estado: ✅ FUNCIONANDO - Basado en análisis exhaustivo SICAR
+    Route::post('/cotizaciones/crear-con-articulo-prueba', [CotizacionController::class, 'crearCotizacionConArticuloPrueba']);
     
-    //NUEVA RUTA: Crear cotización + agregar artículo de prueba (siguiendo flujo exacto SICAR)
-    Route::post('/cotizaciones/prueba-con-articulo', [CotizacionController::class, 'crearCotizacionConArticuloPrueba']);
-    
+    // ✅ Agregar artículo a cotización existente siguiendo flujo exacto SICAR
+    // Estado: ✅ FUNCIONANDO - Basado en análisis decompilado SICAR
     Route::post('/cotizaciones/agregar-articulo', [CotizacionController::class, 'agregarArticuloACotizacion']);
     
+
+
     Route::post('/articulo/asignar-proveedor', [ArticuloController::class, 'asignarProveedor']);
     
     Route::post('/articulo/asignar-proveedor-masivo', [ArticuloController::class, 'asignarProveedorMasivo']);
