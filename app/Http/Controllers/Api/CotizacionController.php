@@ -630,13 +630,26 @@ class CotizacionController extends Controller
                 'origen' => 'CUSPI_ESTRUCTURA_EXISTENTE'
             ]);
 
+            // PASO 7: OBTENER ESTRUCTURA COMPLETA PARA SINCRONIZACIÓN EN CUSPI
+            $detallesCompletos = $this->obtenerDetallesCompletosCotizacion($cotizacionId);
+
             return response()->json([
                 'success' => true,
                 'mensaje' => 'Cotización creada exitosamente desde CUSPI→TUNNEL→SICAR',
                 'cot_id' => $cotizacionId,
+                
+                // ESTRUCTURA COMPLETA PARA SINCRONIZACIÓN CUSPI (Nueva funcionalidad)
+                'cotizacion_completa' => $cotizacionCompleta,
+                'detalles_completos' => $detallesCompletos,
+                'sincronizacion' => [
+                    'tabla_cotizacion' => $this->prepararDatosCotizacionParaCuspi($cotizacionCompleta),
+                    'tabla_detallecot' => $this->prepararDatosDetalleParaCuspi($detallesCompletos)
+                ],
+                
+                // RESPUESTA LEGACY (mantener compatibilidad)
                 'cotizacion' => $cotizacionCompleta,
                 'articulos_agregados' => $articulosAgregados,
-                'flujo' => 'CUSPI_COMPATIBLE'
+                'flujo' => 'CUSPI_SINCRONIZACION_COMPLETA'
             ]);
 
         } catch (\Exception $e) {
@@ -1285,5 +1298,189 @@ class CotizacionController extends Controller
             'moneda' => $cotizacion->moneda,
             'mon_id' => $cotizacion->mon_id
         ];
+    }
+
+    /**
+     * Obtener detalles completos de cotización con estructura de 30 campos
+     * 
+     * Devuelve todos los detalles de la cotización exactamente como están
+     * guardados en SICAR para que CUSPI pueda replicarlos idénticamente.
+     * 
+     * @param int $cotizacionId ID de la cotización
+     * @return array Array de detalles con 30 campos cada uno
+     */
+    private function obtenerDetallesCompletosCotizacion($cotizacionId)
+    {
+        $detalles = DB::table('detallecot as dc')
+            ->join('articulo as a', 'dc.art_id', '=', 'a.art_id')
+            ->select([
+                // Datos básicos (PRIMARY KEY compuesta)
+                'dc.cot_id',
+                'dc.art_id',
+                
+                // Información del artículo (5 campos)
+                'dc.clave',
+                'dc.descripcion',
+                'dc.cantidad',
+                'dc.unidad',
+                
+                // Precios (5 campos)
+                'dc.precioCompra',
+                'dc.precioNorSin',
+                'dc.precioNorCon',
+                'dc.precioSin',
+                'dc.precioCon',
+                
+                // Importes (5 campos)
+                'dc.importeCompra',
+                'dc.importeNorSin',
+                'dc.importeNorCon',
+                'dc.importeSin',
+                'dc.importeCon',
+                
+                // Moneda extranjera (8 campos)
+                'dc.monPrecioNorSin',
+                'dc.monPrecioNorCon',
+                'dc.monPrecioSin',
+                'dc.monPrecioCon',
+                'dc.monImporteNorSin',
+                'dc.monImporteNorCon',
+                'dc.monImporteSin',
+                'dc.monImporteCon',
+                
+                // Cálculos de negocio (2 campos)
+                'dc.diferencia',
+                'dc.utilidad',
+                
+                // Descuentos (2 campos)
+                'dc.descPorcentaje',
+                'dc.descTotal',
+                
+                // Metadatos (2 campos)
+                'dc.caracteristicas',
+                'dc.orden'
+            ])
+            ->where('dc.cot_id', $cotizacionId)
+            ->orderBy('dc.orden')
+            ->get();
+
+        return $detalles->toArray();
+    }
+
+    /**
+     * Preparar datos de cotización para inserción directa en CUSPI
+     * 
+     * Convierte los datos de cotización al formato exacto que necesita
+     * CUSPI para su método insertarCotizacionRealConId().
+     * 
+     * @param array $cotizacionCompleta Datos completos de cotización
+     * @return array Datos listos para INSERT en tabla cotizacion
+     */
+    private function prepararDatosCotizacionParaCuspi($cotizacionCompleta)
+    {
+        return [
+            'cot_id' => $cotizacionCompleta['cot_id'],
+            'fecha' => $cotizacionCompleta['fecha'],
+            'header' => $cotizacionCompleta['header'],
+            'footer' => $cotizacionCompleta['footer'],
+            'subtotal' => $cotizacionCompleta['subtotal'],
+            'descuento' => $cotizacionCompleta['descuento'],
+            'total' => $cotizacionCompleta['total'],
+            'status' => $cotizacionCompleta['status'],
+            'cli_id' => $cotizacionCompleta['cli_id'],
+            'usu_id' => $cotizacionCompleta['usu_id'],
+            'mon_id' => $cotizacionCompleta['mon_id'],
+            'vnd_id' => $cotizacionCompleta['vnd_id'],
+            
+            // Campos adicionales que CUSPI hardcodea actualmente
+            'monSubtotal' => null,
+            'monDescuento' => null,
+            'monTotal' => null,
+            'monAbr' => $cotizacionCompleta['moneda'] ?? 'MXN',
+            'monTipoCambio' => 1.000000,
+            'peso' => 0.0000,
+            'img' => 1,
+            'caracteristicas' => 0,
+            'desglosado' => 1,
+            'mosDescuento' => 0,
+            'mosPeso' => 1,
+            'impuestos' => 1,
+            'mosFirma' => 1,
+            'leyendaImpuestos' => 0,
+            'mosParidad' => 0,
+            'bloqueada' => 0,
+            'mosDetallePaq' => 0,
+            'mosClaveArt' => 1,
+            'folioMovil' => null,
+            'serieMovil' => null,
+            'totalSipa' => null,
+            'mosPreAntDesc' => 0
+        ];
+    }
+
+    /**
+     * Preparar datos de detalles para inserción directa en CUSPI
+     * 
+     * Convierte los detalles de cotización al formato exacto que necesita
+     * CUSPI para su método insertarDetallesCotizacion().
+     * 
+     * @param array $detallesCompletos Array de detalles completos
+     * @return array Array de detalles listos para INSERT en tabla detallecot
+     */
+    private function prepararDatosDetalleParaCuspi($detallesCompletos)
+    {
+        $detallesParaCuspi = [];
+        
+        foreach ($detallesCompletos as $detalle) {
+            $detallesParaCuspi[] = [
+                // PRIMARY KEY compuesta
+                'cot_id' => $detalle->cot_id,
+                'art_id' => $detalle->art_id,
+                
+                // Información del artículo (5 campos)
+                'clave' => $detalle->clave,
+                'descripcion' => $detalle->descripcion,
+                'cantidad' => $detalle->cantidad,
+                'unidad' => $detalle->unidad,
+                
+                // Precios (5 campos)
+                'precioCompra' => $detalle->precioCompra,
+                'precioNorSin' => $detalle->precioNorSin,
+                'precioNorCon' => $detalle->precioNorCon,
+                'precioSin' => $detalle->precioSin,
+                'precioCon' => $detalle->precioCon,
+                
+                // Importes (5 campos)
+                'importeCompra' => $detalle->importeCompra,
+                'importeNorSin' => $detalle->importeNorSin,
+                'importeNorCon' => $detalle->importeNorCon,
+                'importeSin' => $detalle->importeSin,
+                'importeCon' => $detalle->importeCon,
+                
+                // Moneda extranjera (8 campos)
+                'monPrecioNorSin' => $detalle->monPrecioNorSin,
+                'monPrecioNorCon' => $detalle->monPrecioNorCon,
+                'monPrecioSin' => $detalle->monPrecioSin,
+                'monPrecioCon' => $detalle->monPrecioCon,
+                'monImporteNorSin' => $detalle->monImporteNorSin,
+                'monImporteNorCon' => $detalle->monImporteNorCon,
+                'monImporteSin' => $detalle->monImporteSin,
+                'monImporteCon' => $detalle->monImporteCon,
+                
+                // Cálculos de negocio (2 campos)
+                'diferencia' => $detalle->diferencia,
+                'utilidad' => $detalle->utilidad,
+                
+                // Descuentos (2 campos)
+                'descPorcentaje' => $detalle->descPorcentaje,
+                'descTotal' => $detalle->descTotal,
+                
+                // Metadatos (2 campos)
+                'caracteristicas' => $detalle->caracteristicas,
+                'orden' => $detalle->orden
+            ];
+        }
+        
+        return $detallesParaCuspi;
     }
 }
