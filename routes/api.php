@@ -8,6 +8,7 @@ use App\Http\Controllers\Api\TunnelController;
 use App\Http\Controllers\Api\CotizacionController;
 use App\Http\Controllers\Api\ArticuloController;
 use App\Http\Controllers\Api\PedidoController;
+use App\Http\Controllers\Api\VentaController;
 
 /*
 |--------------------------------------------------------------------------
@@ -50,7 +51,13 @@ Route::middleware('validate.apikey')->group(function() {
     Route::post('/articulo/asignar-proveedor-masivo', [ArticuloController::class, 'asignarProveedorMasivo']);
     
     Route::post('/pedidos/crear', [PedidoController::class, 'crear']);
-    
+
+    // ✅ RUTA DE VENTAS
+    // Endpoint para crear ventas desde CUSPI en BD SICAR
+    // Estado: ✅ IMPLEMENTADO - Replica exactamente módulo de ventas SICAR
+    // Las ventas se pueden abrir en SICAR sin problemas
+    Route::post('/sicar/ventas/store', [VentaController::class, 'store']);
+
     Route::get('/backup/logs', function (Request $request) {
         try {
             $logFile = storage_path('logs/laravel.log');
