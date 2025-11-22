@@ -42,6 +42,113 @@ use Illuminate\Support\Facades\Log;
 class VentaController extends Controller
 {
     /**
+     * Convertir número decimal a texto en español mexicano
+     *
+     * Formato: "(DOSCIENTOS CUARENTA Y DOS PESOS 44/100 MN)"
+     *
+     * @param float $numero
+     * @return string
+     */
+    private function convertirTotalALetras(float $numero): string
+    {
+        $entero = floor($numero);
+        $decimales = round(($numero - $entero) * 100);
+
+        // Arrays de conversión
+        $unidades = ['', 'UN', 'DOS', 'TRES', 'CUATRO', 'CINCO', 'SEIS', 'SIETE', 'OCHO', 'NUEVE'];
+        $especiales = ['DIEZ', 'ONCE', 'DOCE', 'TRECE', 'CATORCE', 'QUINCE', 'DIECISÉIS', 'DIECISIETE', 'DIECIOCHO', 'DIECINUEVE'];
+        $decenas = ['', '', 'VEINTE', 'TREINTA', 'CUARENTA', 'CINCUENTA', 'SESENTA', 'SETENTA', 'OCHENTA', 'NOVENTA'];
+        $centenas = ['', 'CIENTO', 'DOSCIENTOS', 'TRESCIENTOS', 'CUATROCIENTOS', 'QUINIENTOS', 'SEISCIENTOS', 'SETECIENTOS', 'OCHOCIENTOS', 'NOVECIENTOS'];
+
+        if ($entero == 0) {
+            $letras = 'CERO';
+        } else {
+            $letras = $this->convertirGrupo($entero, $unidades, $especiales, $decenas, $centenas);
+        }
+
+        // Pluralizar PESOS
+        $moneda = ($entero == 1) ? 'PESO' : 'PESOS';
+
+        return sprintf('(%s %s %02d/100 MN)', $letras, $moneda, $decimales);
+    }
+
+    /**
+     * Convertir grupo de hasta 999 a letras
+     */
+    private function convertirGrupo(int $numero, array $unidades, array $especiales, array $decenas, array $centenas): string
+    {
+        if ($numero >= 1000000) {
+            $millones = floor($numero / 1000000);
+            $resto = $numero % 1000000;
+
+            if ($millones == 1) {
+                $texto = 'UN MILLÓN';
+            } else {
+                $texto = $this->convertirGrupo($millones, $unidades, $especiales, $decenas, $centenas) . ' MILLONES';
+            }
+
+            if ($resto > 0) {
+                $texto .= ' ' . $this->convertirGrupo($resto, $unidades, $especiales, $decenas, $centenas);
+            }
+
+            return $texto;
+        }
+
+        if ($numero >= 1000) {
+            $miles = floor($numero / 1000);
+            $resto = $numero % 1000;
+
+            if ($miles == 1) {
+                $texto = 'MIL';
+            } else {
+                $texto = $this->convertirGrupo($miles, $unidades, $especiales, $decenas, $centenas) . ' MIL';
+            }
+
+            if ($resto > 0) {
+                $texto .= ' ' . $this->convertirGrupo($resto, $unidades, $especiales, $decenas, $centenas);
+            }
+
+            return $texto;
+        }
+
+        if ($numero >= 100) {
+            $centena = floor($numero / 100);
+            $resto = $numero % 100;
+
+            if ($numero == 100) {
+                return 'CIEN';
+            }
+
+            $texto = $centenas[$centena];
+
+            if ($resto > 0) {
+                $texto .= ' ' . $this->convertirGrupo($resto, $unidades, $especiales, $decenas, $centenas);
+            }
+
+            return $texto;
+        }
+
+        if ($numero >= 20) {
+            $decena = floor($numero / 10);
+            $unidad = $numero % 10;
+
+            $texto = $decenas[$decena];
+
+            if ($unidad > 0) {
+                $texto .= ' Y ' . $unidades[$unidad];
+            }
+
+            return $texto;
+        }
+
+        if ($numero >= 10) {
+            return $especiales[$numero - 10];
+        }
+
+        return $unidades[$numero];
+    }
+
+    /**
      * Crear venta en SICAR desde CUSPI
      *
      * Endpoint: POST /api/sicar/ventas/store
@@ -147,6 +254,37 @@ class VentaController extends Controller
             $ventaConf = DB::table('ventaconf')->first();
 
             // ======================================================================
+            // CALCULAR CAMPOS DE COSTO Y UTILIDAD (antes del INSERT)
+            // ======================================================================
+            Log::info('TUNNEL VENTAS: Calculando campos de costo y utilidad');
+
+            $totalCompra = 0;
+            $subtotalCompra = 0;
+
+            foreach ($datos['detalles'] as $detalle) {
+                $costoArticulo = $detalle['precioCompra'] * $detalle['cantidad'];
+                $totalCompra += $costoArticulo;
+                $subtotalCompra += $costoArticulo;
+            }
+
+            $totalUtilidad = $datos['venta']['total'] - $totalCompra;
+            $subtotalUtilidad = $datos['venta']['subtotal'] - $subtotalCompra;
+
+            Log::info('TUNNEL VENTAS: Campos calculados', [
+                'totalCompra' => $totalCompra,
+                'totalUtilidad' => $totalUtilidad,
+                'subtotalCompra' => $subtotalCompra,
+                'subtotalUtilidad' => $subtotalUtilidad
+            ]);
+
+            // ======================================================================
+            // GENERAR LETRA (total en letras)
+            // ======================================================================
+            $letra = $this->convertirTotalALetras($datos['venta']['total']);
+
+            Log::info('TUNNEL VENTAS: Letra generada', ['letra' => $letra]);
+
+            // ======================================================================
             // PASO 1: INSERT INTO venta
             // ======================================================================
             Log::info('TUNNEL VENTAS: Paso 1 - Insertando venta principal');
@@ -154,7 +292,7 @@ class VentaController extends Controller
             $ventaData = [
                 // Campos de CUSPI
                 'fecha' => $datos['venta']['fecha'],
-                'subtotal0' => $datos['venta']['subtotal0'] ?? 0.00,
+                'subtotal0' => 0.00, // ✅ CORREGIDO: Siempre 0.00 en ventas normales
                 'subtotal' => $datos['venta']['subtotal'],
                 'descuento' => $datos['venta']['descuento'] ?? 0.00,
                 'total' => $datos['venta']['total'],
@@ -166,10 +304,17 @@ class VentaController extends Controller
                 'caj_id' => $datos['venta']['caj_id'] ?? 1,
                 'mon_id' => $datos['venta']['mon_id'] ?? 1,
                 'vnd_id' => $datos['venta']['vnd_id'] ?? null,
-                'rcc_id' => $cliente->cli_id, // SICAR usa rcc_id para cliente
+                'rcc_id' => null, // ✅ CORREGIDO: NULL (no es cliente, es resumen de corte de caja)
 
-                // Campos con valores por defecto (necesarios para que SICAR abra la venta)
-                'letra' => '',
+                // Campos CALCULADOS (necesarios para que SICAR abra la venta)
+                'letra' => $letra, // ✅ CORREGIDO: Total en letras
+                'peso' => 0.0000, // ✅ CORREGIDO: 0.0000 por defecto
+                'totalCompra' => $totalCompra, // ✅ CORREGIDO: Calculado
+                'totalUtilidad' => $totalUtilidad, // ✅ CORREGIDO: Calculado
+                'subtotalCompra' => $subtotalCompra, // ✅ CORREGIDO: Calculado
+                'subtotalUtilidad' => $subtotalUtilidad, // ✅ CORREGIDO: Calculado
+
+                // Campos moneda extranjera (no se usan)
                 'monSubtotal0' => null,
                 'monSubtotal' => null,
                 'monDescuento' => null,
@@ -183,11 +328,6 @@ class VentaController extends Controller
                 'ventaPorAjuste' => 0,
                 'puntos' => null,
                 'monedas' => null,
-                'peso' => null,
-                'totalCompra' => null,
-                'totalUtilidad' => null,
-                'subtotalCompra' => null,
-                'subtotalUtilidad' => null,
                 'afStatus' => null,
                 'afConsumo' => null,
                 'afFechaVencimiento' => null,
