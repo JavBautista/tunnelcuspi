@@ -173,7 +173,7 @@ class VentaController extends Controller
             $validator = Validator::make($request->all(), [
                 // Venta principal
                 'venta' => 'required|array',
-                'venta.fecha' => 'required|date_format:Y-m-d H:i:s',
+                'venta.fecha' => 'nullable|date_format:Y-m-d H:i:s',  // Opcional: TunnelCUSPI genera fecha local
                 'venta.subtotal' => 'required|numeric|min:0',
                 'venta.descuento' => 'nullable|numeric|min:0',
                 'venta.total' => 'required|numeric|min:0',
@@ -285,6 +285,12 @@ class VentaController extends Controller
             Log::info('TUNNEL VENTAS: Letra generada', ['letra' => $letra]);
 
             // ======================================================================
+            // GENERAR FECHA LOCAL (independiente del cliente)
+            // ======================================================================
+            $fechaLocal = now()->format('Y-m-d H:i:s');
+            Log::info('TUNNEL VENTAS: Fecha local generada', ['fecha' => $fechaLocal]);
+
+            // ======================================================================
             // CREAR REGISTRO EN TABLA NOTA (OBLIGATORIO)
             // ======================================================================
             Log::info('TUNNEL VENTAS: Creando registro en tabla nota');
@@ -315,7 +321,7 @@ class VentaController extends Controller
 
             $ventaData = [
                 // Campos de CUSPI
-                'fecha' => $datos['venta']['fecha'],
+                'fecha' => $fechaLocal,
                 'subtotal0' => 0.00, // ✅ CORREGIDO: Siempre 0.00 en ventas normales
                 'subtotal' => $datos['venta']['subtotal'],
                 'descuento' => $datos['venta']['descuento'] ?? 0.00,
@@ -353,7 +359,7 @@ class VentaController extends Controller
                 'ventaPorAjuste' => 0,
                 'puntos' => null,
                 'monedas' => null,
-                'afStatus' => null,
+                'afStatus' => -2,
                 'afConsumo' => null,
                 'afFechaVencimiento' => null,
                 'afFechaSolicitud' => null,
@@ -372,7 +378,7 @@ class VentaController extends Controller
                 'diferenciaTotal' => null,
                 'monDiferenciaTotal' => null,
                 'tic_id' => null,
-                'not_id' => null,
+                // 'not_id' => null,  // ❌ REMOVIDO: Ya se asigna en línea 332
                 'rem_id' => null,
                 'can_caj_id' => null,
                 'can_rcc_id' => null,
@@ -394,7 +400,7 @@ class VentaController extends Controller
 
             // Formato de fecha: "17 nov 14:04"
             setlocale(LC_TIME, 'es_ES.UTF-8', 'es_ES', 'Spanish');
-            $fechaObj = new \DateTime($datos['venta']['fecha']);
+            $fechaObj = new \DateTime($fechaLocal);
             $mes = [
                 '01' => 'ene', '02' => 'feb', '03' => 'mar', '04' => 'abr',
                 '05' => 'may', '06' => 'jun', '07' => 'jul', '08' => 'ago',
@@ -632,7 +638,7 @@ class VentaController extends Controller
 
             DB::table('historial')->insert([
                 'movimiento' => 0,                          // 0 = Creación
-                'fecha' => $datos['venta']['fecha'],       // Fecha de la venta
+                'fecha' => $fechaLocal,                     // Fecha local del servidor
                 'tabla' => 'Venta',                        // Con V mayúscula (CRÍTICO)
                 'id' => $venId,                            // ven_id generado
                 'usu_id' => $usuId                         // Usuario: enviado o CUSPIBOT
@@ -643,6 +649,26 @@ class VentaController extends Controller
                 'id' => $venId,
                 'usu_id' => $usuId,
                 'usuario_origen' => isset($datos['venta']['usu_id']) ? 'CUSPI' : 'CUSPIBOT (default)'
+            ]);
+
+            // ======================================================================
+            // PASO 10: INSERT INTO movimiento (CRÍTICO para que aparezca en SICAR)
+            // ======================================================================
+            Log::info('TUNNEL VENTAS: Paso 10 - Registrando movimiento');
+
+            DB::table('movimiento')->insert([
+                'total' => $datos['venta']['total'],
+                'comentario' => $comentario,
+                'tipo' => 1,                            // 1 = Venta
+                'status' => 1,                          // 1 = Activo
+                'caj_id' => $datos['venta']['caj_id'] ?? 1,
+                'tpa_id' => 1,                          // Primera forma de pago
+                'ven_id' => $venId
+            ]);
+
+            Log::info('TUNNEL VENTAS: Movimiento registrado', [
+                'ven_id' => $venId,
+                'total' => $datos['venta']['total']
             ]);
 
             // ======================================================================
