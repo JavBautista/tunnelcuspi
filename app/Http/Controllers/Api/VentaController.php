@@ -390,36 +390,11 @@ class VentaController extends Controller
             Log::info('TUNNEL VENTAS: Venta principal insertada', ['ven_id' => $venId]);
 
             // ======================================================================
-            // GENERAR Y ACTUALIZAR COMENTARIO (formato SICAR)
+            // USAR COMENTARIO ENVIADO DESDE CUSPI (NO generar automáticamente)
             // ======================================================================
-            // Formato: "Venta #2000010066040541 17 nov 14:04 hs"
-            // El folio es el ven_id con padding de ceros a la izquierda
-
-            // Generar folio con el ven_id (mínimo 13 dígitos con padding)
-            $folio = str_pad($venId, 13, '0', STR_PAD_LEFT);
-
-            // Formato de fecha: "17 nov 14:04"
-            setlocale(LC_TIME, 'es_ES.UTF-8', 'es_ES', 'Spanish');
-            $fechaObj = new \DateTime($fechaLocal);
-            $mes = [
-                '01' => 'ene', '02' => 'feb', '03' => 'mar', '04' => 'abr',
-                '05' => 'may', '06' => 'jun', '07' => 'jul', '08' => 'ago',
-                '09' => 'sep', '10' => 'oct', '11' => 'nov', '12' => 'dic'
-            ];
-            $dia = $fechaObj->format('d');
-            $mesTexto = $mes[$fechaObj->format('m')];
-            $hora = $fechaObj->format('H:i');
-            $fechaFormato = "{$dia} {$mesTexto} {$hora}";
-
-            // Comentario final
-            $comentario = "Venta #{$folio} {$fechaFormato} hs";
-
-            // Actualizar comentario en la venta
-            DB::table('venta')
-                ->where('ven_id', $venId)
-                ->update(['comentario' => $comentario]);
-
-            Log::info('TUNNEL VENTAS: Comentario generado', ['comentario' => $comentario]);
+            $comentario = $datos['venta']['comentario'] ?? "Venta generada desde TunnelCUSPI";
+            
+            Log::info('TUNNEL VENTAS: Usando comentario de CUSPI', ['comentario' => $comentario]);
 
             // ======================================================================
             // PASO 2: Folio = ven_id (SICAR usa ven_id como folio)
