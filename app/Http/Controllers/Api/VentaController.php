@@ -285,6 +285,30 @@ class VentaController extends Controller
             Log::info('TUNNEL VENTAS: Letra generada', ['letra' => $letra]);
 
             // ======================================================================
+            // CREAR REGISTRO EN TABLA NOTA (OBLIGATORIO)
+            // ======================================================================
+            Log::info('TUNNEL VENTAS: Creando registro en tabla nota');
+
+            $notId = DB::table('nota')->insertGetId([
+                'cli_id' => $datos['venta']['cli_id']
+            ]);
+
+            Log::info('TUNNEL VENTAS: Nota creada', ['not_id' => $notId]);
+
+            // ======================================================================
+            // OBTENER VENDEDOR ACTIVO
+            // ======================================================================
+            // Usar vendedor enviado por CUSPI, o el primero activo si no se envió
+            $vndId = $datos['venta']['vnd_id'] ??
+                     DB::table('vendedor')->where('status', 1)->value('vnd_id');
+
+            if (!$vndId) {
+                throw new \Exception('No hay vendedores activos en el sistema');
+            }
+
+            Log::info('TUNNEL VENTAS: Vendedor asignado', ['vnd_id' => $vndId]);
+
+            // ======================================================================
             // PASO 1: INSERT INTO venta
             // ======================================================================
             Log::info('TUNNEL VENTAS: Paso 1 - Insertando venta principal');
@@ -303,8 +327,9 @@ class VentaController extends Controller
                 // FKs
                 'caj_id' => $datos['venta']['caj_id'] ?? 1,
                 'mon_id' => $datos['venta']['mon_id'] ?? 1,
-                'vnd_id' => $datos['venta']['vnd_id'] ?? null,
+                'vnd_id' => $vndId, // ✅ CORREGIDO: Vendedor activo (obligatorio)
                 'rcc_id' => null, // ✅ CORREGIDO: NULL (no es cliente, es resumen de corte de caja)
+                'not_id' => $notId, // ✅ CORREGIDO: Nota creada (obligatorio)
 
                 // Campos CALCULADOS (necesarios para que SICAR abra la venta)
                 'letra' => $letra, // ✅ CORREGIDO: Total en letras
@@ -357,6 +382,38 @@ class VentaController extends Controller
             $venId = DB::table('venta')->insertGetId($ventaData);
 
             Log::info('TUNNEL VENTAS: Venta principal insertada', ['ven_id' => $venId]);
+
+            // ======================================================================
+            // GENERAR Y ACTUALIZAR COMENTARIO (formato SICAR)
+            // ======================================================================
+            // Formato: "Venta #2000010066040541 17 nov 14:04 hs"
+            // El folio es el ven_id con padding de ceros a la izquierda
+
+            // Generar folio con el ven_id (mínimo 13 dígitos con padding)
+            $folio = str_pad($venId, 13, '0', STR_PAD_LEFT);
+
+            // Formato de fecha: "17 nov 14:04"
+            setlocale(LC_TIME, 'es_ES.UTF-8', 'es_ES', 'Spanish');
+            $fechaObj = new \DateTime($datos['venta']['fecha']);
+            $mes = [
+                '01' => 'ene', '02' => 'feb', '03' => 'mar', '04' => 'abr',
+                '05' => 'may', '06' => 'jun', '07' => 'jul', '08' => 'ago',
+                '09' => 'sep', '10' => 'oct', '11' => 'nov', '12' => 'dic'
+            ];
+            $dia = $fechaObj->format('d');
+            $mesTexto = $mes[$fechaObj->format('m')];
+            $hora = $fechaObj->format('H:i');
+            $fechaFormato = "{$dia} {$mesTexto} {$hora}";
+
+            // Comentario final
+            $comentario = "Venta #{$folio} {$fechaFormato} hs";
+
+            // Actualizar comentario en la venta
+            DB::table('venta')
+                ->where('ven_id', $venId)
+                ->update(['comentario' => $comentario]);
+
+            Log::info('TUNNEL VENTAS: Comentario generado', ['comentario' => $comentario]);
 
             // ======================================================================
             // PASO 2: Folio = ven_id (SICAR usa ven_id como folio)
