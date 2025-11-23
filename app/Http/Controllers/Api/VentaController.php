@@ -178,7 +178,7 @@ class VentaController extends Controller
                 'venta.descuento' => 'nullable|numeric|min:0',
                 'venta.total' => 'required|numeric|min:0',
                 'venta.cli_id' => 'required|integer',
-                'venta.usu_id' => 'required|integer',
+                'venta.usu_id' => 'nullable|integer',  // OPCIONAL - usa CUSPIBOT si no se envía
                 'venta.suc_id' => 'required|integer',
                 'venta.status' => 'required|integer|in:1,-1',
 
@@ -621,6 +621,29 @@ class VentaController extends Controller
                     ]);
                 }
             }
+
+            // ======================================================================
+            // PASO 9: INSERT INTO historial (CRÍTICO para que se vea en Consultas)
+            // ======================================================================
+            Log::info('TUNNEL VENTAS: Paso 9 - Registrando en historial');
+
+            // Usar usuario enviado por CUSPI, o CUSPIBOT (usu_id=23) como default
+            $usuId = $datos['venta']['usu_id'] ?? 23;  // 23 = CUSPIBOT (usuario de integraciones)
+
+            DB::table('historial')->insert([
+                'movimiento' => 0,                          // 0 = Creación
+                'fecha' => $datos['venta']['fecha'],       // Fecha de la venta
+                'tabla' => 'Venta',                        // Con V mayúscula (CRÍTICO)
+                'id' => $venId,                            // ven_id generado
+                'usu_id' => $usuId                         // Usuario: enviado o CUSPIBOT
+            ]);
+
+            Log::info('TUNNEL VENTAS: Historial registrado', [
+                'tabla' => 'Venta',
+                'id' => $venId,
+                'usu_id' => $usuId,
+                'usuario_origen' => isset($datos['venta']['usu_id']) ? 'CUSPI' : 'CUSPIBOT (default)'
+            ]);
 
             // ======================================================================
             // COMMIT - Todo exitoso
