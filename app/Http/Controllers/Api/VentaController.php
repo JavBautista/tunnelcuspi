@@ -254,6 +254,87 @@ class VentaController extends Controller
             $ventaConf = DB::table('ventaconf')->first();
 
             // ======================================================================
+            // DETECTAR SI ES VENTA A CRÉDITO (tpa_id = 3)
+            // ======================================================================
+            $esCredito = false;
+            $fechaLimiteCredito = null;
+
+            foreach ($datos['formasPago'] as $pago) {
+                if ($pago['tpa_id'] == 3) {  // 3 = CRÉDITO en SICAR
+                    $esCredito = true;
+                    break;
+                }
+            }
+
+            Log::info('TUNNEL VENTAS: Tipo de venta detectado', [
+                'esCredito' => $esCredito,
+                'formasPago' => $datos['formasPago']
+            ]);
+
+            // ======================================================================
+            // VALIDACIONES DE CRÉDITO (solo si es venta a crédito)
+            // ======================================================================
+            if ($esCredito) {
+                Log::info('TUNNEL VENTAS: Validando crédito del cliente');
+
+                // 1. Validar que el cliente tenga límite de crédito > 0
+                if (!isset($cliente->limite) || $cliente->limite <= 0) {
+                    throw new \Exception("El cliente no tiene línea de crédito configurada");
+                }
+
+                // 2. Validar que el cliente tenga días de crédito > 0
+                if (!isset($cliente->diasCredito) || $cliente->diasCredito <= 0) {
+                    throw new \Exception("El cliente no tiene días de crédito configurados");
+                }
+
+                // 3. Calcular crédito utilizado (query exacto de SICAR)
+                // creditoUtilizado = SUM(total - abonos) de créditos activos
+                $creditoUtilizado = DB::table('creditocliente as cc')
+                    ->selectRaw('
+                        COALESCE(SUM(
+                            cc.total -
+                            COALESCE((
+                                SELECT SUM(ac.total)
+                                FROM abonocliente ac
+                                WHERE ac.ccl_id = cc.ccl_id AND ac.status = 1
+                            ), 0)
+                        ), 0) as utilizado
+                    ')
+                    ->where('cc.cli_id', $cliente->cli_id)
+                    ->where('cc.status', 1)  // Solo créditos activos
+                    ->value('utilizado');
+
+                // 4. Calcular crédito disponible
+                $creditoDisponible = $cliente->limite - $creditoUtilizado;
+
+                Log::info('TUNNEL VENTAS: Crédito del cliente', [
+                    'cli_id' => $cliente->cli_id,
+                    'limite' => $cliente->limite,
+                    'creditoUtilizado' => $creditoUtilizado,
+                    'creditoDisponible' => $creditoDisponible,
+                    'totalVenta' => $datos['venta']['total']
+                ]);
+
+                // 5. Validar que el crédito disponible sea suficiente
+                if ($datos['venta']['total'] > $creditoDisponible) {
+                    throw new \Exception(
+                        "Crédito insuficiente. Disponible: $" . number_format($creditoDisponible, 2) .
+                        ", Total venta: $" . number_format($datos['venta']['total'], 2)
+                    );
+                }
+
+                // 6. Calcular fecha límite del crédito
+                // Usar días personalizados si CUSPI los envía, sino usar los del cliente
+                $diasCredito = $datos['creditoCliente']['diasCredito'] ?? $cliente->diasCredito;
+                $fechaLimiteCredito = now()->addDays($diasCredito)->format('Y-m-d');
+
+                Log::info('TUNNEL VENTAS: Crédito validado correctamente', [
+                    'diasCredito' => $diasCredito,
+                    'fechaLimite' => $fechaLimiteCredito
+                ]);
+            }
+
+            // ======================================================================
             // CALCULAR CAMPOS DE COSTO Y UTILIDAD (antes del INSERT)
             // ======================================================================
             Log::info('TUNNEL VENTAS: Calculando campos de costo y utilidad');
@@ -291,13 +372,30 @@ class VentaController extends Controller
             Log::info('TUNNEL VENTAS: Fecha local generada', ['fecha' => $fechaLocal]);
 
             // ======================================================================
+            // ESTRUCTURA PARA RETORNAR TODO LO INSERTADO A CUSPI
+            // ======================================================================
+            $insertados = [
+                'nota' => null,
+                'venta' => null,
+                'detallev' => [],
+                'detallevimpuesto' => [],
+                'ventaimp' => [],
+                'ventatipopago' => [],
+                'creditocliente' => null,
+                'ventanotacredito' => [],
+                'historial' => null,
+                'movimiento' => null,
+                'articulos_actualizados' => []
+            ];
+
+            // ======================================================================
             // CREAR REGISTRO EN TABLA NOTA (OBLIGATORIO)
             // ======================================================================
             Log::info('TUNNEL VENTAS: Creando registro en tabla nota');
 
-            $notId = DB::table('nota')->insertGetId([
-                'cli_id' => $datos['venta']['cli_id']
-            ]);
+            $notaData = ['cli_id' => $datos['venta']['cli_id']];
+            $notId = DB::table('nota')->insertGetId($notaData);
+            $insertados['nota'] = array_merge(['not_id' => $notId], $notaData);
 
             Log::info('TUNNEL VENTAS: Nota creada', ['not_id' => $notId]);
 
@@ -386,6 +484,7 @@ class VentaController extends Controller
             ];
 
             $venId = DB::table('venta')->insertGetId($ventaData);
+            $insertados['venta'] = array_merge(['ven_id' => $venId], $ventaData);
 
             Log::info('TUNNEL VENTAS: Venta principal insertada', ['ven_id' => $venId]);
 
@@ -409,7 +508,7 @@ class VentaController extends Controller
             ]);
 
             foreach ($datos['detalles'] as $detalle) {
-                DB::table('detallev')->insert([
+                $detallevData = [
                     // Campos de CUSPI
                     'ven_id' => $venId,
                     'art_id' => $detalle['art_id'],
@@ -469,7 +568,9 @@ class VentaController extends Controller
                     'localizacion' => null,
                     'precioConAntFac' => null,
                     'importeConAntFac' => null
-                ]);
+                ];
+                DB::table('detallev')->insert($detallevData);
+                $insertados['detallev'][] = $detallevData;
             }
 
             // ======================================================================
@@ -484,7 +585,7 @@ class VentaController extends Controller
                     // Obtener nombre del impuesto
                     $impuestoInfo = DB::table('impuesto')->where('imp_id', $impuesto['imp_id'])->first();
 
-                    DB::table('detallevimpuesto')->insert([
+                    $detallevimpData = [
                         'ven_id' => $venId,
                         'art_id' => $impuesto['art_id'],
                         'imp_id' => $impuesto['imp_id'],
@@ -495,7 +596,9 @@ class VentaController extends Controller
                         'monTotal' => null,
                         'tipoFactor' => $impuestoInfo->tipoFactor ?? null,
                         'aplicaIVA' => $impuestoInfo->aplicarIVA ?? null
-                    ]);
+                    ];
+                    DB::table('detallevimpuesto')->insert($detallevimpData);
+                    $insertados['detallevimpuesto'][] = $detallevimpData;
                 }
             }
 
@@ -509,7 +612,7 @@ class VentaController extends Controller
 
                 $orden = 1;
                 foreach ($datos['impuestos'] as $impuesto) {
-                    DB::table('ventaimp')->insert([
+                    $ventaimpData = [
                         'ven_id' => $venId,
                         'imp_id' => $impuesto['imp_id'],
                         'subtotal' => $impuesto['base'],  // base → subtotal
@@ -519,7 +622,9 @@ class VentaController extends Controller
                         'aplicaIVA' => null,
                         'monSubtotal' => null,
                         'monTotal' => null
-                    ]);
+                    ];
+                    DB::table('ventaimp')->insert($ventaimpData);
+                    $insertados['ventaimp'][] = $ventaimpData;
                 }
             }
 
@@ -531,12 +636,14 @@ class VentaController extends Controller
             ]);
 
             foreach ($datos['formasPago'] as $pago) {
-                DB::table('ventatipopago')->insert([
+                $ventatipopagoData = [
                     'ven_id' => $venId,
                     'tpa_id' => $pago['tpa_id'],
                     'total' => $pago['importe'],  // importe → total
                     'monTotal' => $pago['importe']
-                ]);
+                ];
+                DB::table('ventatipopago')->insert($ventatipopagoData);
+                $insertados['ventatipopago'][] = $ventatipopagoData;
             }
 
             // ======================================================================
@@ -561,6 +668,15 @@ class VentaController extends Controller
                 DB::table('articulo')
                     ->where('art_id', $detalle['art_id'])
                     ->decrement('existencia', $detalle['cantidad']);
+
+                // Guardar datos de actualización para CUSPI
+                $existenciaNueva = $existenciaActual - $detalle['cantidad'];
+                $insertados['articulos_actualizados'][] = [
+                    'art_id' => $detalle['art_id'],
+                    'existencia_anterior' => $existenciaActual,
+                    'cantidad_vendida' => $detalle['cantidad'],
+                    'existencia_nueva' => $existenciaNueva
+                ];
             }
 
             // ======================================================================
@@ -572,17 +688,28 @@ class VentaController extends Controller
 
             // ======================================================================
             // PASO 9: INSERT INTO creditocliente (SOLO si es venta a crédito)
+            // Basado en: ANALISIS_FLUJO_CREDITO_COMPLETO.md de dev_sicar
             // ======================================================================
-            if (!empty($datos['creditoCliente'])) {
+            if ($esCredito) {
                 Log::info('TUNNEL VENTAS: Paso 9 - Insertando crédito de cliente');
 
-                DB::table('creditocliente')->insert([
+                $creditoclienteData = [
+                    'fechaLimite' => $fechaLimiteCredito,
+                    'total' => $datos['venta']['total'],
+                    'comentario' => $datos['venta']['comentario'] ?? '',
+                    'status' => 1,  // 1 = Crédito activo (sin pagar)
+                    'cli_id' => $datos['venta']['cli_id'],
+                    'ven_id' => $venId
+                ];
+                $cclId = DB::table('creditocliente')->insertGetId($creditoclienteData);
+                $insertados['creditocliente'] = array_merge(['ccl_id' => $cclId], $creditoclienteData);
+
+                Log::info('TUNNEL VENTAS: Crédito de cliente insertado', [
+                    'ccl_id' => $cclId,
                     'cli_id' => $datos['venta']['cli_id'],
                     'ven_id' => $venId,
-                    'fechaLimite' => $datos['creditoCliente']['fechaLimite'],
-                    'total' => $datos['creditoCliente']['total'],
-                    'comentario' => $datos['creditoCliente']['comentario'] ?? '',
-                    'status' => $datos['creditoCliente']['status'] ?? 1
+                    'total' => $datos['venta']['total'],
+                    'fechaLimite' => $fechaLimiteCredito
                 ]);
             }
 
@@ -595,11 +722,13 @@ class VentaController extends Controller
                 ]);
 
                 foreach ($datos['notasCredito'] as $nota) {
-                    DB::table('ventanotacredito')->insert([
+                    $ventanotacreditoData = [
                         'ven_id' => $venId,
                         'ncr_id' => $nota['ncr_id'],
                         'total' => $nota['importe']
-                    ]);
+                    ];
+                    DB::table('ventanotacredito')->insert($ventanotacreditoData);
+                    $insertados['ventanotacredito'][] = $ventanotacreditoData;
                 }
             }
 
@@ -611,13 +740,15 @@ class VentaController extends Controller
             // Usar usuario enviado por CUSPI, o CUSPIBOT (usu_id=23) como default
             $usuId = $datos['venta']['usu_id'] ?? 23;  // 23 = CUSPIBOT (usuario de integraciones)
 
-            DB::table('historial')->insert([
+            $historialData = [
                 'movimiento' => 0,                          // 0 = Creación
                 'fecha' => $fechaLocal,                     // Fecha local del servidor
                 'tabla' => 'Venta',                        // Con V mayúscula (CRÍTICO)
                 'id' => $venId,                            // ven_id generado
                 'usu_id' => $usuId                         // Usuario: enviado o CUSPIBOT
-            ]);
+            ];
+            DB::table('historial')->insert($historialData);
+            $insertados['historial'] = $historialData;
 
             Log::info('TUNNEL VENTAS: Historial registrado', [
                 'tabla' => 'Venta',
@@ -631,7 +762,7 @@ class VentaController extends Controller
             // ======================================================================
             Log::info('TUNNEL VENTAS: Paso 10 - Registrando movimiento');
 
-            DB::table('movimiento')->insert([
+            $movimientoData = [
                 'total' => $datos['venta']['total'],
                 'comentario' => $comentario,
                 'tipo' => 1,                            // 1 = Venta
@@ -639,7 +770,9 @@ class VentaController extends Controller
                 'caj_id' => $datos['venta']['caj_id'] ?? 1,
                 'tpa_id' => 1,                          // Primera forma de pago
                 'ven_id' => $venId
-            ]);
+            ];
+            DB::table('movimiento')->insert($movimientoData);
+            $insertados['movimiento'] = $movimientoData;
 
             Log::info('TUNNEL VENTAS: Movimiento registrado', [
                 'ven_id' => $venId,
@@ -655,13 +788,12 @@ class VentaController extends Controller
                 'ven_id' => $venId
             ]);
 
-            // Respuesta según especificación CUSPI
+            // Respuesta con TODOS los datos insertados para que CUSPI replique
             return response()->json([
                 'success' => true,
                 'message' => 'Venta insertada exitosamente',
-                'data' => [
-                    'ven_id' => $venId
-                ]
+                'ven_id' => $venId,
+                'insertados' => $insertados
             ], 201);
 
         } catch (\Exception $e) {
