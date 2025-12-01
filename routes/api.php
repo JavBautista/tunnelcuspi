@@ -9,6 +9,7 @@ use App\Http\Controllers\Api\CotizacionController;
 use App\Http\Controllers\Api\ArticuloController;
 use App\Http\Controllers\Api\PedidoController;
 use App\Http\Controllers\Api\VentaController;
+use App\Http\Controllers\Api\ClienteController;
 
 /*
 |--------------------------------------------------------------------------
@@ -57,6 +58,12 @@ Route::middleware('validate.apikey')->group(function() {
     // Estado: ✅ IMPLEMENTADO - Replica exactamente módulo de ventas SICAR
     // Las ventas se pueden abrir en SICAR sin problemas
     Route::post('/sicar/ventas/store', [VentaController::class, 'store']);
+
+    // ✅ RUTA DE CLIENTES
+    // Endpoint para crear clientes desde CUSPI en BD SICAR
+    // Estado: ✅ IMPLEMENTADO - Replica exactamente módulo de clientes SICAR
+    // Basado en: secliente-4.0.jar (DCliente.guardarCliente)
+    Route::post('/clientes', [ClienteController::class, 'store']);
 
     Route::get('/backup/logs', function (Request $request) {
         try {
