@@ -10,6 +10,7 @@ use App\Http\Controllers\Api\ArticuloController;
 use App\Http\Controllers\Api\PedidoController;
 use App\Http\Controllers\Api\VentaController;
 use App\Http\Controllers\Api\ClienteController;
+use App\Http\Controllers\Api\AbonoClienteController;
 
 /*
 |--------------------------------------------------------------------------
@@ -64,6 +65,13 @@ Route::middleware('validate.apikey')->group(function() {
     // Estado: ✅ IMPLEMENTADO - Replica exactamente módulo de clientes SICAR
     // Basado en: secliente-4.0.jar (DCliente.guardarCliente)
     Route::post('/clientes', [ClienteController::class, 'store']);
+
+    // ✅ RUTA DE ABONOS A CRÉDITO
+    // Endpoint para registrar abonos a créditos de clientes desde CUSPI en BD SICAR
+    // Estado: ✅ IMPLEMENTADO - Replica exactamente módulo de abonos SICAR
+    // Basado en: seclientecred-4.0.jar (DAbono.java, AbonoLogic.java)
+    // Flujo: abonocliente → movimiento → caja → historial → creditocliente (si liquida)
+    Route::post('/abonos/crear', [AbonoClienteController::class, 'store']);
 
     Route::get('/backup/logs', function (Request $request) {
         try {
