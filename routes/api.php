@@ -73,6 +73,18 @@ Route::middleware('validate.apikey')->group(function() {
     // Flujo: abonocliente → movimiento → caja → historial → creditocliente (si liquida)
     Route::post('/abonos/crear', [AbonoClienteController::class, 'store']);
 
+    // ✅ RUTA DE MULTIPAGO (F8)
+    // Endpoint para registrar UN pago distribuido en MULTIPLES créditos del mismo cliente
+    // Estado: ✅ IMPLEMENTADO - Replica exactamente módulo MultiPago SICAR
+    // Basado en: seclientecred-4.0.jar (DMultiPago.java, DSelCredito.java, AbonoLogic.crearMultipago)
+    // Diferencias con abono simple:
+    //   - Usa tabla padre: aboclipadre
+    //   - Campo acp_id en abonocliente apunta al padre
+    //   - Crea UN movimiento POR CADA abono
+    //   - Distribución SECUENCIAL: llena créditos en orden hasta agotar monto
+    // Flujo: aboclipadre → (abonocliente → movimiento → caja → tipotarjeta? → historial → creditocliente?) x N
+    Route::post('/abonos/multipago', [AbonoClienteController::class, 'multipago']);
+
     Route::get('/backup/logs', function (Request $request) {
         try {
             $logFile = storage_path('logs/laravel.log');
